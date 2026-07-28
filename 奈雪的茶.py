@@ -268,6 +268,12 @@ def _yyb_normalize_line(line, stderr=False):
             account_name = name
             stripped = stripped[len(prefix) :].strip()
             break
+    stripped = _yyb_re.sub(
+        r"(请求\s*YYB\s*Go\s*获取\s*code)\s*[:：].*$",
+        r"\1",
+        stripped,
+        flags=_yyb_re.IGNORECASE,
+    )
     if stripped.startswith("["):
         return stripped
     if _yyb_re.match(r"^[^\w\s]{1,3}\s*\[[^]]+\]", stripped):
