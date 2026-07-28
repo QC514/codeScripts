@@ -286,7 +286,13 @@
     if (line.includes("任务执行完成") || /^[✅❌🕒]\s*(成功|失败|结束时间)\s*[:：]/u.test(line.trim())) return;
     const normalized = normalizeLine(line, level);
     recordStatus(normalized);
-    if (normalized.includes("PushPlus")) emitFooter();
+    const pushEvent =
+      logTag(line) === "PushPlus" &&
+      !/^\s*[=\-*]/u.test(line) &&
+      ["开始推送", "正在推送", "未配置", "跳过", "成功", "失败", "异常"].some(
+        (keyword) => line.includes(keyword),
+      );
+    if (pushEvent) emitFooter();
     emitRaw(normalized, level === "error" ? "error" : level === "warn" ? "warn" : "log");
   }
 

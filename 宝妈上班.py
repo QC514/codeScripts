@@ -437,7 +437,23 @@ def _yyb_process_line(line, stream, stderr=False):
 
     normalized = _yyb_normalize_line(stripped, stderr=stderr)
     _yyb_record_status(normalized)
-    if "PushPlus" in normalized:
+    push_event = (
+        _yyb_log_tag(stripped) == "PushPlus"
+        and not re.match(r"^\s*[=\-*]", stripped)
+        and any(
+            keyword in stripped
+            for keyword in (
+                "开始推送",
+                "正在推送",
+                "未配置",
+                "跳过",
+                "成功",
+                "失败",
+                "异常",
+            )
+        )
+    )
+    if push_event:
         _yyb_emit_footer()
     _yyb_emit_raw(normalized, stream=stream)
 
@@ -538,6 +554,7 @@ def _yyb_push_notification():
     if _yyb_notification_sent:
         return
     _yyb_notification_sent = True
+    _yyb_flush_captured_output()
     _yyb_emit_footer()
     try:
         title, body = _yyb_build_notification()
