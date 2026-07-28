@@ -1,79 +1,165 @@
 # === YYB_GO 统一通知注入 begin ===
-import os as __os, sys as __sys, io as __io, atexit as __atexit, re as __re
+import atexit as _yyb_atexit
+import importlib as _yyb_importlib
+import json as _yyb_json
+import os as _yyb_os
+import re as _yyb_re
+import sys as _yyb_sys
+import urllib.request as _yyb_url_request
+
+_YYB_KEY_NAMES = ("QYWX_KEY", "QYWX", "WEWORK_KEY")
+_YYB_LOG_LIMIT = 40
 _yyb_logs = []
-class __LogHook(__io.TextIOBase):
-    def __init__(self, s): self._s = s
-    def write(self, s):
-        if s and s != '\n': _yyb_logs.append(s.rstrip('\n'))
-        self._s.write(s); return len(s)
-    def flush(self): self._s.flush()
-if not isinstance(__sys.stdout, __LogHook): __sys.stdout = __LogHook(__sys.stdout)
-if not isinstance(__sys.stderr, __LogHook): __sys.stderr = __LogHook(__sys.stderr)
+_yyb_notification_sent = False
 
-__pushed = False
-def __push():
-    global __pushed
-    if __pushed: return
-    try:
-        body = '\n'.join(_yyb_logs[-40:])
-        title = __os.path.basename(__sys.argv[0]) if __sys.argv else 'YYB_GO'
-        sn = None
-        try:
-            from sendNotify import sendNotify as _sn
-            sn = _sn
-        except Exception:
-            sn = None
-        if sn and callable(sn):
-            try: sn(title, body); return
-            except Exception: pass
-        key = __resolve_key()
+
+class _YybLogStream:
+    """Mirror a stream and collect complete lines for the final notification."""
+
+    _yyb_output_capture = True
+
+    def __init__(self, stream, prefix=""):
+        self._stream = stream
+        self._prefix = prefix
+        self._buffer = ""
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+    def _capture(self, text):
+        text = text.rstrip("\r")
+        if text:
+            _yyb_logs.append(f"{self._prefix}{text}")
+
+    def capture_pending(self):
+        if self._buffer:
+            self._capture(self._buffer)
+            self._buffer = ""
+
+    def flush(self):
+        self.capture_pending()
+        self._stream.flush()
+
+    def write(self, text):
+        written = self._stream.write(text)
+        self._buffer += text
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            self._capture(line)
+        return written
+
+    def writelines(self, lines):
+        for line in lines:
+            self.write(line)
+
+
+def _yyb_install_output_capture():
+    if not getattr(_yyb_sys.stdout, "_yyb_output_capture", False):
+        _yyb_sys.stdout = _YybLogStream(_yyb_sys.stdout)
+    if not getattr(_yyb_sys.stderr, "_yyb_output_capture", False):
+        _yyb_sys.stderr = _YybLogStream(_yyb_sys.stderr, "[stderr] ")
+
+
+def _yyb_flush_captured_output():
+    for stream in (_yyb_sys.stdout, _yyb_sys.stderr):
+        capture_pending = getattr(stream, "capture_pending", None)
+        if callable(capture_pending):
+            capture_pending()
+
+
+def _yyb_resolve_key():
+    for name in _YYB_KEY_NAMES:
+        key = _yyb_os.environ.get(name)
         if key:
-            import json as __json, urllib.request as __ur
-            data = __json.dumps({'msgtype':'text','text':{'content':f'【{title}】\n{body}'}}).encode('utf-8')
-            req = __ur.Request(f'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}', data=data, headers={'Content-Type':'application/json'})
-            __ur.urlopen(req, timeout=15)
-    except Exception:
-        pass
-    __pushed = True
+            return key
 
-def __resolve_key():
-    k = __os.environ.get('QYWX_KEY') or __os.environ.get('QYWX') or __os.environ.get('WEWORK_KEY')
-    if k: return k
-    for cand in ('sendNotify.js', '/ql/data/scripts/sendNotify.js'):
+    for candidate in ("sendNotify.js", "/ql/data/scripts/sendNotify.js"):
         try:
-            t = open(cand, encoding='utf-8').read()
-            m = __re.search(r"QYWX_KEY\s*=\s*'([^']+)'", t)
-            if not m:
-                m = __re.search(r'QYWX_KEY\s*=\s*"([^"]+)"', t)
-            if m: return m.group(1)
-        except Exception:
-            pass
+            with open(candidate, encoding="utf-8") as notify_file:
+                source = notify_file.read()
+            match = _yyb_re.search(r"QYWX_KEY\s*=\s*['\"]([^'\"]+)['\"]", source)
+            if match:
+                return match.group(1)
+        except (OSError, UnicodeError):
+            continue
     return None
 
-# 自然退出 / sys.exit 走 atexit；os._exit 绕过 atexit，单独拦截
-__orig_os_exit = __os._exit
-def __patched_os_exit(code=0):
-    global __pushed
-    if __pushed:
-        return __orig_os_exit(code)
-    __pushed = True
-    try: __push()
-    except Exception: pass
-    return __orig_os_exit(code)
-try: __os._exit = __patched_os_exit
-except Exception: pass
 
-__atexit.register(__push)
+def _yyb_build_notification():
+    _yyb_flush_captured_output()
+    title = _yyb_os.path.basename(_yyb_sys.argv[0]) if _yyb_sys.argv else "YYB_GO"
+    body = "\n".join(_yyb_logs[-_YYB_LOG_LIMIT:])
+    return title, body or "任务执行完成，无日志输出。"
+
+
+def _yyb_push_notification():
+    global _yyb_notification_sent
+
+    if _yyb_notification_sent:
+        return
+    _yyb_notification_sent = True
+
+    try:
+        title, body = _yyb_build_notification()
+        try:
+            notify_module = _yyb_importlib.import_module("sendNotify")
+            send_notify = getattr(notify_module, "sendNotify", None)
+        except ImportError:
+            send_notify = None
+
+        if callable(send_notify):
+            try:
+                send_notify(title, body)
+                return
+            except Exception:
+                pass
+
+        key = _yyb_resolve_key()
+        if not key:
+            return
+
+        payload = _yyb_json.dumps(
+            {
+                "msgtype": "text",
+                "text": {"content": f"【{title}】\n{body}"},
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+        request = _yyb_url_request.Request(
+            f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        with _yyb_url_request.urlopen(request, timeout=15):
+            pass
+    except Exception:
+        pass
+
+
+_yyb_original_os_exit = _yyb_os._exit
+
+
+def _yyb_patched_os_exit(code=0):
+    _yyb_push_notification()
+    _yyb_original_os_exit(code)
+
+
+_yyb_install_output_capture()
+try:
+    _yyb_os._exit = _yyb_patched_os_exit
+except (AttributeError, TypeError):
+    pass
+_yyb_atexit.register(_yyb_push_notification)
 # === YYB_GO 统一通知注入 end ===
 
 # name: 三福
 # cron: 0 40 8 * * *
-import os
-import time
-import random
-import requests
 import asyncio
+import os
+import random
+import time
 
+import requests
 
 # ===================== 强制全局禁用系统代理环境变量，避免干扰 =====================
 for env_key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]:
@@ -85,10 +171,10 @@ PLUSPLUS_TOKEN = os.getenv("PLUSPLUS_TOKEN", "")
 
 # 从环境变量 YYB_GO 读取内网服务器，多条换行分隔
 SERVERS = []
-env_YYB_GO = os.getenv("YYB_GO", "")
-if env_YYB_GO:
+env_yyb_go = os.getenv("YYB_GO", "")
+if env_yyb_go:
     # 兼容 \r\n 和 \n 换行，去除每行前后空格，过滤空行
-    raw_lines = env_YYB_GO.splitlines()
+    raw_lines = env_yyb_go.splitlines()
     SERVERS = [line.strip() for line in raw_lines if line.strip()]
 
 # 校验是否存在有效服务地址
@@ -114,46 +200,74 @@ ENABLE_DIRECT_FALLBACK = True
 
 APPID = "wxfe13a2a5df88b058"
 USER_AGENT_LIST = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781 NetType/WIFI MiniProgramEnv/Windows WindowsWechat/WMPF",
-    "Mozilla/5.0 (Linux; Android 14; 2512BPNDAC Build/UKQ1.230917.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/146.0.7680.153 Mobile Safari/537.36 XWEB/1460043 MMWEBSDK/20251006 MiniProgramEnv/android",
-    "Mozilla/5.0 (Linux; Android 13; Redmi K60 Build/TKQ1.221114.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/130.0.6723.102 Mobile Safari/537.36 XWEB/1300003 MMWEBSDK/20250901 MiniProgramEnv/android"
+    (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 "
+        "MicroMessenger/7.0.20.1781 NetType/WIFI MiniProgramEnv/Windows "
+        "WindowsWechat/WMPF"
+    ),
+    (
+        "Mozilla/5.0 (Linux; Android 14; 2512BPNDAC Build/UKQ1.230917.001; wv) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 "
+        "Chrome/146.0.7680.153 Mobile Safari/537.36 XWEB/1460043 "
+        "MMWEBSDK/20251006 MiniProgramEnv/android"
+    ),
+    (
+        "Mozilla/5.0 (Linux; Android 13; Redmi K60 Build/TKQ1.221114.001; wv) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 "
+        "Chrome/130.0.6723.102 Mobile Safari/537.36 XWEB/1300003 "
+        "MMWEBSDK/20250901 MiniProgramEnv/android"
+    ),
 ]
 BASE_URL = "https://crm.sanfu.com"
+
 
 # ===================== 工具函数 =====================
 async def sleep(ms):
     await asyncio.sleep(ms / 1000)
 
+
 def random_int(min_val, max_val):
     return random.randint(min_val, max_val)
 
-def getUA():
+
+def get_ua():
     return random.choice(USER_AGENT_LIST)
 
+
 # ====================== 品赞IP代理系统 ======================
-def parseProxyResponse(text):
+def parse_proxy_response(text):
     text = text.strip()
     if not text:
         return None
     try:
         import json
+
         data = json.loads(text)
-        proxyObj = None
-        if data.get("data") and isinstance(data["data"], list) and len(data["data"]) > 0:
-            proxyObj = data["data"][0]
+        proxy_obj = None
+        if (
+            data.get("data")
+            and isinstance(data["data"], list)
+            and len(data["data"]) > 0
+        ):
+            proxy_obj = data["data"][0]
         elif data.get("ip") and data.get("port"):
-            proxyObj = data
-        elif data.get("result") and data["result"].get("ip") and data["result"].get("port"):
-            proxyObj = data["result"]
-        
-        if proxyObj:
+            proxy_obj = data
+        elif (
+            data.get("result")
+            and data["result"].get("ip")
+            and data["result"].get("port")
+        ):
+            proxy_obj = data["result"]
+
+        if proxy_obj:
             return {
-                "host": proxyObj["ip"],
-                "port": int(proxyObj["port"]),
-                "username": proxyObj.get("user") or proxyObj.get("username") or "",
-                "password": proxyObj.get("pass") or proxyObj.get("password") or ""
+                "host": proxy_obj["ip"],
+                "port": int(proxy_obj["port"]),
+                "username": proxy_obj.get("user") or proxy_obj.get("username") or "",
+                "password": proxy_obj.get("pass") or proxy_obj.get("password") or "",
             }
-    except:
+    except (TypeError, ValueError, KeyError):
         pass
     if ":" in text:
         parts = text.split(":")
@@ -162,37 +276,38 @@ def parseProxyResponse(text):
                 "host": parts[0],
                 "port": int(parts[1]),
                 "username": parts[2] if len(parts) > 2 else "",
-                "password": parts[3] if len(parts) > 3 else ""
+                "password": parts[3] if len(parts) > 3 else "",
             }
     return None
 
-def buildProxyDict(proxyInfo):
-    if not proxyInfo:
+
+def build_proxy_dict(proxy_info):
+    if not proxy_info:
         return None
-    host = proxyInfo["host"]
-    port = proxyInfo["port"]
-    username = proxyInfo["username"]
-    password = proxyInfo["password"]
-    
+    host = proxy_info["host"]
+    port = proxy_info["port"]
+    username = proxy_info["username"]
+    password = proxy_info["password"]
+
     auth = ""
     if username and password:
         auth = f"{requests.utils.quote(username)}:{requests.utils.quote(password)}@"
-    
+
     if PROXY_TYPE == "socks5":
         proxy_url = f"socks5://{auth}{host}:{port}"
     else:
         proxy_url = f"http://{auth}{host}:{port}"
-    
-    return {
-        "http": proxy_url,
-        "https": proxy_url
-    }
 
-def validateProxy(proxies):
+    return {"http": proxy_url, "https": proxy_url}
+
+
+def validate_proxy(proxies):
     if not proxies:
         return False
     try:
-        res = requests.get(PROXY_VALIDATE_URL, proxies=proxies, timeout=15, verify=False)
+        res = requests.get(
+            PROXY_VALIDATE_URL, proxies=proxies, timeout=15, verify=False
+        )
         if res.status_code == 200:
             print(f"✅ 代理验证通过，出口IP：{res.json().get('origin', '未知')}")
             return True
@@ -201,37 +316,42 @@ def validateProxy(proxies):
         print(f"⚠️ 代理验证失败，原因：{str(e)[:60]}")
         return False
 
-async def getValidProxy(accountName):
+
+async def get_valid_proxy(account_name):
     if not PROXY_API:
-        print(f"ℹ️ [{accountName}] 未配置代理API，使用直连")
+        print(f"ℹ️ [{account_name}] 未配置代理API，使用直连")
         return None
-    print(f"🔌 [{accountName}] 正在从品赞API获取专属代理 ({PROXY_TYPE})...")
-    
+    print(f"🔌 [{account_name}] 正在从品赞API获取专属代理 ({PROXY_TYPE})...")
+
     for i in range(PROXY_RETRY_TIMES):
         try:
             res = requests.get(PROXY_API, timeout=15, proxies={})
-            proxyInfo = parseProxyResponse(res.text)
-            
-            if not proxyInfo:
-                print(f"⚠️ [{accountName}] 第{i+1}次获取代理失败：响应格式无法解析")
+            proxy_info = parse_proxy_response(res.text)
+
+            if not proxy_info:
+                print(f"⚠️ [{account_name}] 第{i + 1}次获取代理失败：响应格式无法解析")
                 continue
-            print(f"✅ [{accountName}] 提取到专属代理：{proxyInfo['host']}:{proxyInfo['port']}")
-            
-            proxies = buildProxyDict(proxyInfo)
-            if validateProxy(proxies):
+            print(
+                f"✅ [{account_name}] 提取到专属代理："
+                f"{proxy_info['host']}:{proxy_info['port']}"
+            )
+
+            proxies = build_proxy_dict(proxy_info)
+            if validate_proxy(proxies):
                 return proxies
             else:
-                print(f"⚠️ [{accountName}] 第{i+1}次获取的代理不可用，正在重试...")
+                print(f"⚠️ [{account_name}] 第{i + 1}次获取的代理不可用，正在重试...")
         except Exception as e:
-            print(f"⚠️ [{accountName}] 第{i+1}次获取代理异常：{str(e)[:60]}")
-        
+            print(f"⚠️ [{account_name}] 第{i + 1}次获取代理异常：{str(e)[:60]}")
+
         if i < PROXY_RETRY_TIMES - 1:
             await sleep(2000)
-    print(f"❌ [{accountName}] 连续多次获取代理失败，使用直连")
+    print(f"❌ [{account_name}] 连续多次获取代理失败，使用直连")
     return None
 
+
 # ===================== PushPlus通知 =====================
-def sendPlusPlusNotification(title, content):
+def send_pushplus_notification(title, content):
     if not PLUSPLUS_TOKEN:
         return
     try:
@@ -240,12 +360,13 @@ def sendPlusPlusNotification(title, content):
             "token": PLUSPLUS_TOKEN,
             "title": title,
             "content": content,
-            "template": "txt"
+            "template": "txt",
         }
         requests.post(url, json=data, timeout=5)
         print("✅ 通知推送成功")
     except Exception as e:
         print(f"❌ 通知推送失败：{str(e)}")
+
 
 # ===================== 业务函数 =====================
 def parse_yyb_go_entry(raw_value):
@@ -274,7 +395,8 @@ def parse_yyb_go_entry(raw_value):
 
     return server, ref
 
-def getCode(server):
+
+def get_code(server):
     parsed_server, ref = parse_yyb_go_entry(server)
     if not parsed_server or not ref:
         return None
@@ -291,7 +413,7 @@ def getCode(server):
             proxies={"http": None, "https": None},
         )
         data = res.json()
-        code = (((data.get("data") or {}).get("result") or {}).get("code"))
+        code = ((data.get("data") or {}).get("result") or {}).get("code")
         if data.get("code") != 0 or not code:
             print(f"[{parsed_server}] 获取code失败：{data}")
             return None
@@ -302,50 +424,64 @@ def getCode(server):
         print(f"[{parsed_server}] 获取code异常：{exc}")
         return None
 
-def wxLogin(jsCode, UA, proxies, server):
+
+def wx_login(js_code, user_agent, proxies, server):
     headers = {
         "Host": "crm.sanfu.com",
         "Content-Type": "application/json",
-        "User-Agent": UA,
+        "User-Agent": user_agent,
         "xweb_xhr": "1",
         "Referer": f"https://servicewechat.com/{APPID}/385/page-frame.html",
-        "Accept": "*/*"
+        "Accept": "*/*",
     }
     login_url = f"{BASE_URL}/ms-sanfu-wechat-customer-core/customer/core/wxMiniAppLogin"
     payload = {
-        "code": jsCode,
+        "code": js_code,
         "appid": APPID,
         "shoId": "",
         "userId": "",
         "sourceWxsceneid": 1027,
-        "sourceUrl": "pages/ucenter_index/ucenter_index"
+        "sourceUrl": "pages/ucenter_index/ucenter_index",
     }
-    
+
     try:
         response = None
         if proxies:
             print(f"🌐 [{server}] 正在使用专属代理发起登录请求...")
             try:
-                response = requests.post(login_url, json=payload, headers=headers, proxies=proxies, timeout=20)
+                response = requests.post(
+                    login_url,
+                    json=payload,
+                    headers=headers,
+                    proxies=proxies,
+                    timeout=20,
+                )
             except Exception as e:
                 print(f"⚠️ [{server}] 代理登录失败，切换直连重试...")
-                response = requests.post(login_url, json=payload, headers=headers, proxies={}, timeout=20)
+                response = requests.post(
+                    login_url, json=payload, headers=headers, proxies={}, timeout=20
+                )
         else:
-            response = requests.post(login_url, json=payload, headers=headers, proxies={}, timeout=20)
-        
+            response = requests.post(
+                login_url, json=payload, headers=headers, proxies={}, timeout=20
+            )
+
         print(f"[{server}] 登录接口返回：{response.text[:300]}")
         return response.json()
     except Exception as e:
         print(f"❌ [{server}] 登录异常: {str(e)[:60]}")
         return None
 
+
 # 核心修复：改用sid鉴权，删除无效token头
-def commonRequest(url, method="GET", body=None, sid="", UA="", proxies=None, server=""):
+def common_request(
+    url, method="GET", body=None, sid="", user_agent="", proxies=None, server=""
+):
     headers = {
         "Host": "crm.sanfu.com",
         "Content-Type": "application/json",
-        "User-Agent": UA,
-        "Referer": f"https://servicewechat.com/{APPID}/385/page-frame.html"
+        "User-Agent": user_agent,
+        "Referer": f"https://servicewechat.com/{APPID}/385/page-frame.html",
     }
     req_url = f"{BASE_URL}{url}"
     if body is None:
@@ -358,59 +494,78 @@ def commonRequest(url, method="GET", body=None, sid="", UA="", proxies=None, ser
         if proxies:
             try:
                 if method.upper() == "POST":
-                    response = requests.post(req_url, json=body, headers=headers, proxies=proxies, timeout=20)
+                    response = requests.post(
+                        req_url, json=body, headers=headers, proxies=proxies, timeout=20
+                    )
                 else:
-                    response = requests.get(req_url, params=body, headers=headers, proxies=proxies, timeout=20)
+                    response = requests.get(
+                        req_url,
+                        params=body,
+                        headers=headers,
+                        proxies=proxies,
+                        timeout=20,
+                    )
             except Exception as e:
                 print(f"⚠️ [{server}] 代理请求失败，切换直连重试...")
                 if method.upper() == "POST":
-                    response = requests.post(req_url, json=body, headers=headers, proxies={}, timeout=20)
+                    response = requests.post(
+                        req_url, json=body, headers=headers, proxies={}, timeout=20
+                    )
                 else:
-                    response = requests.get(req_url, params=body, headers=headers, proxies={}, timeout=20)
+                    response = requests.get(
+                        req_url, params=body, headers=headers, proxies={}, timeout=20
+                    )
         else:
             if method.upper() == "POST":
-                response = requests.post(req_url, json=body, headers=headers, proxies={}, timeout=20)
+                response = requests.post(
+                    req_url, json=body, headers=headers, proxies={}, timeout=20
+                )
             else:
-                response = requests.get(req_url, params=body, headers=headers, proxies={}, timeout=20)
+                response = requests.get(
+                    req_url, params=body, headers=headers, proxies={}, timeout=20
+                )
         return response.json()
     except Exception as e:
         print(f"❌ [{server}] 请求异常: {str(e)[:60]}")
         return None
 
+
 # ===================== 单个账号执行 =====================
-async def runAccount(server, globalProxyAgent):
+async def run_account(server, global_proxy_agent):
     result = {
         "server": server,
         "success": False,
         "signMsg": "",
         "scoreMsg": "",
         "error": "",
-        "proxyStatus": "未使用代理"
+        "proxyStatus": "未使用代理",
     }
     print(f"\n===== 三福 - {server} 账号 =====")
-    UA = getUA()
-    proxyAgent = globalProxyAgent
+    user_agent = get_ua()
+    proxy_agent = global_proxy_agent
     if ENABLE_PER_ACCOUNT_PROXY:
-        proxyAgent = await getValidProxy(server)
-        result["proxyStatus"] = "使用专属代理" if proxyAgent else "使用直连"
+        proxy_agent = await get_valid_proxy(server)
+        result["proxyStatus"] = "使用专属代理" if proxy_agent else "使用直连"
         await sleep(PROXY_FETCH_INTERVAL)
-    
+
     try:
-        startDelay = random_int(2000, 6000)
-        print(f"⏳ [{server}] 启动延迟 {startDelay / 1000}s")
-        await sleep(startDelay)
-        
+        start_delay = random_int(2000, 6000)
+        print(f"⏳ [{server}] 启动延迟 {start_delay / 1000}s")
+        await sleep(start_delay)
+
         # 1. 获取code
-        code = getCode(server)
+        code = get_code(server)
         if not code:
             result["error"] = "获取code失败"
             print(f"❌ [{server}] 获取code失败")
             return result
-        
+
         # 2. 登录获取sid
-        login_data = wxLogin(code, UA, proxyAgent, server)
+        login_data = wx_login(code, user_agent, proxy_agent, server)
         if not login_data or login_data.get("code") != 200:
-            result["error"] = login_data.get("msg", "登录失败") if login_data else "登录无响应"
+            result["error"] = (
+                login_data.get("msg", "登录失败") if login_data else "登录无响应"
+            )
             print(f"❌ [{server}] 登录失败：{result['error']}")
             return result
         sid = login_data["data"].get("sid", "")
@@ -420,16 +575,16 @@ async def runAccount(server, globalProxyAgent):
             return result
         print(f"✅ [{server}] 登录成功获取sid")
         await sleep(random_int(3000, 8000))
-        
+
         # 3. 每日签到
-        sign_data = commonRequest(
+        sign_data = common_request(
             "/ms-sanfu-wechat-common/customer/onSign",
             method="POST",
             body={"signWay": 0},
             sid=sid,
-            UA=UA,
-            proxies=proxyAgent,
-            server=server
+            user_agent=user_agent,
+            proxies=proxy_agent,
+            server=server,
         )
         if sign_data and sign_data.get("code") == 200:
             fubi = sign_data["data"].get("fubi", 0)
@@ -441,22 +596,22 @@ async def runAccount(server, globalProxyAgent):
             result["signMsg"] = f"签到失败：{msg}"
             print(f"❌ [{server}] {result['signMsg']}")
         await sleep(random_int(2000, 5000))
-        
+
         # 4. 查询福币
-        info_data = commonRequest(
+        info_data = common_request(
             "/ms-sanfu-wechat-customer/customer/index/baseInfo",
             method="GET",
             body={},
             sid=sid,
-            UA=UA,
-            proxies=proxyAgent,
-            server=server
+            user_agent=user_agent,
+            proxies=proxy_agent,
+            server=server,
         )
         if info_data and info_data.get("code") == 200:
             cur_fubi = info_data["data"].get("fubi", 0)
             result["scoreMsg"] = f"当前账号总福币：{cur_fubi}个"
             print(f"🎯 [{server}] {result['scoreMsg']}")
-        
+
         result["success"] = True
         print(f"✅ [{server}] 账号执行完成")
     except Exception as e:
@@ -464,32 +619,36 @@ async def runAccount(server, globalProxyAgent):
         print(f"❌ [{server}] 执行异常：{str(e)[:60]}")
     return result
 
+
 # ===================== 主程序 =====================
 async def main():
-    print('===== 三福动态code签到（环境变量YYB_GO多内网+品赞代理+sid鉴权修复版）=====\n')
-    globalProxyAgent = None
+    print(
+        "===== 三福动态code签到（环境变量YYB_GO多内网+品赞代理+sid鉴权修复版）=====\n"
+    )
+    global_proxy_agent = None
     if not ENABLE_PER_ACCOUNT_PROXY:
-        globalProxyAgent = await getValidProxy("全局共用")
-    
+        global_proxy_agent = await get_valid_proxy("全局共用")
+
     results = []
     for server in SERVERS:
-        res = await runAccount(server, globalProxyAgent)
+        res = await run_account(server, global_proxy_agent)
         results.append(res)
         await sleep(2000)
-    
-    notifyContent = "### 三福多账号任务执行结果\n"
+
+    notify_content = "### 三福多账号任务执行结果\n"
     for res in results:
-        notifyContent += f"\n#### {res['server']}\n"
-        notifyContent += f"- 代理状态：{res['proxyStatus']}\n"
-        notifyContent += f"- 执行状态：{'成功' if res['success'] else '失败'}\n"
+        notify_content += f"\n#### {res['server']}\n"
+        notify_content += f"- 代理状态：{res['proxyStatus']}\n"
+        notify_content += f"- 执行状态：{'成功' if res['success'] else '失败'}\n"
         if res["success"]:
-            notifyContent += f"- 签到结果：{res['signMsg']}\n"
-            notifyContent += f"- 福币信息：{res['scoreMsg']}\n"
+            notify_content += f"- 签到结果：{res['signMsg']}\n"
+            notify_content += f"- 福币信息：{res['scoreMsg']}\n"
         else:
-            notifyContent += f"- 失败原因：{res['error']}\n"
-    
-    sendPlusPlusNotification("三福多账号任务完成", notifyContent)
-    print('\n===== 所有账号执行完成 =====')
+            notify_content += f"- 失败原因：{res['error']}\n"
+
+    send_pushplus_notification("三福多账号任务完成", notify_content)
+    print("\n===== 所有账号执行完成 =====")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

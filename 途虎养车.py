@@ -1,69 +1,155 @@
 # === YYB_GO 统一通知注入 begin ===
-import os as __os, sys as __sys, io as __io, atexit as __atexit, re as __re
+import atexit as _yyb_atexit
+import importlib as _yyb_importlib
+import json as _yyb_json
+import os as _yyb_os
+import re as _yyb_re
+import sys as _yyb_sys
+import urllib.request as _yyb_url_request
+
+_YYB_KEY_NAMES = ("QYWX_KEY", "QYWX", "WEWORK_KEY")
+_YYB_LOG_LIMIT = 40
 _yyb_logs = []
-class __LogHook(__io.TextIOBase):
-    def __init__(self, s): self._s = s
-    def write(self, s):
-        if s and s != '\n': _yyb_logs.append(s.rstrip('\n'))
-        self._s.write(s); return len(s)
-    def flush(self): self._s.flush()
-if not isinstance(__sys.stdout, __LogHook): __sys.stdout = __LogHook(__sys.stdout)
-if not isinstance(__sys.stderr, __LogHook): __sys.stderr = __LogHook(__sys.stderr)
+_yyb_notification_sent = False
 
-__pushed = False
-def __push():
-    global __pushed
-    if __pushed: return
-    try:
-        body = '\n'.join(_yyb_logs[-40:])
-        title = __os.path.basename(__sys.argv[0]) if __sys.argv else 'YYB_GO'
-        sn = None
-        try:
-            from sendNotify import sendNotify as _sn
-            sn = _sn
-        except Exception:
-            sn = None
-        if sn and callable(sn):
-            try: sn(title, body); return
-            except Exception: pass
-        key = __resolve_key()
+
+class _YybLogStream:
+    """Mirror a stream and collect complete lines for the final notification."""
+
+    _yyb_output_capture = True
+
+    def __init__(self, stream, prefix=""):
+        self._stream = stream
+        self._prefix = prefix
+        self._buffer = ""
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+    def _capture(self, text):
+        text = text.rstrip("\r")
+        if text:
+            _yyb_logs.append(f"{self._prefix}{text}")
+
+    def capture_pending(self):
+        if self._buffer:
+            self._capture(self._buffer)
+            self._buffer = ""
+
+    def flush(self):
+        self.capture_pending()
+        self._stream.flush()
+
+    def write(self, text):
+        written = self._stream.write(text)
+        self._buffer += text
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            self._capture(line)
+        return written
+
+    def writelines(self, lines):
+        for line in lines:
+            self.write(line)
+
+
+def _yyb_install_output_capture():
+    if not getattr(_yyb_sys.stdout, "_yyb_output_capture", False):
+        _yyb_sys.stdout = _YybLogStream(_yyb_sys.stdout)
+    if not getattr(_yyb_sys.stderr, "_yyb_output_capture", False):
+        _yyb_sys.stderr = _YybLogStream(_yyb_sys.stderr, "[stderr] ")
+
+
+def _yyb_flush_captured_output():
+    for stream in (_yyb_sys.stdout, _yyb_sys.stderr):
+        capture_pending = getattr(stream, "capture_pending", None)
+        if callable(capture_pending):
+            capture_pending()
+
+
+def _yyb_resolve_key():
+    for name in _YYB_KEY_NAMES:
+        key = _yyb_os.environ.get(name)
         if key:
-            import json as __json, urllib.request as __ur
-            data = __json.dumps({'msgtype':'text','text':{'content':f'【{title}】\n{body}'}}).encode('utf-8')
-            req = __ur.Request(f'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}', data=data, headers={'Content-Type':'application/json'})
-            __ur.urlopen(req, timeout=15)
-    except Exception:
-        pass
-    __pushed = True
+            return key
 
-def __resolve_key():
-    k = __os.environ.get('QYWX_KEY') or __os.environ.get('QYWX') or __os.environ.get('WEWORK_KEY')
-    if k: return k
-    for cand in ('sendNotify.js', '/ql/data/scripts/sendNotify.js'):
+    for candidate in ("sendNotify.js", "/ql/data/scripts/sendNotify.js"):
         try:
-            t = open(cand, encoding='utf-8').read()
-            m = __re.search(r"QYWX_KEY\s*=\s*'([^']+)'", t)
-            if not m:
-                m = __re.search(r'QYWX_KEY\s*=\s*"([^"]+)"', t)
-            if m: return m.group(1)
-        except Exception:
-            pass
+            with open(candidate, encoding="utf-8") as notify_file:
+                source = notify_file.read()
+            match = _yyb_re.search(r"QYWX_KEY\s*=\s*['\"]([^'\"]+)['\"]", source)
+            if match:
+                return match.group(1)
+        except (OSError, UnicodeError):
+            continue
     return None
 
-# 自然退出 / sys.exit 走 atexit；os._exit 绕过 atexit，单独拦截
-__orig_os_exit = __os._exit
-def __patched_os_exit(code=0):
-    global __pushed
-    if __pushed:
-        return __orig_os_exit(code)
-    __pushed = True
-    try: __push()
-    except Exception: pass
-    return __orig_os_exit(code)
-try: __os._exit = __patched_os_exit
-except Exception: pass
 
-__atexit.register(__push)
+def _yyb_build_notification():
+    _yyb_flush_captured_output()
+    title = _yyb_os.path.basename(_yyb_sys.argv[0]) if _yyb_sys.argv else "YYB_GO"
+    body = "\n".join(_yyb_logs[-_YYB_LOG_LIMIT:])
+    return title, body or "任务执行完成，无日志输出。"
+
+
+def _yyb_push_notification():
+    global _yyb_notification_sent
+
+    if _yyb_notification_sent:
+        return
+    _yyb_notification_sent = True
+
+    try:
+        title, body = _yyb_build_notification()
+        try:
+            notify_module = _yyb_importlib.import_module("sendNotify")
+            send_notify = getattr(notify_module, "sendNotify", None)
+        except ImportError:
+            send_notify = None
+
+        if callable(send_notify):
+            try:
+                send_notify(title, body)
+                return
+            except Exception:
+                pass
+
+        key = _yyb_resolve_key()
+        if not key:
+            return
+
+        payload = _yyb_json.dumps(
+            {
+                "msgtype": "text",
+                "text": {"content": f"【{title}】\n{body}"},
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+        request = _yyb_url_request.Request(
+            f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        with _yyb_url_request.urlopen(request, timeout=15):
+            pass
+    except Exception:
+        pass
+
+
+_yyb_original_os_exit = _yyb_os._exit
+
+
+def _yyb_patched_os_exit(code=0):
+    _yyb_push_notification()
+    _yyb_original_os_exit(code)
+
+
+_yyb_install_output_capture()
+try:
+    _yyb_os._exit = _yyb_patched_os_exit
+except (AttributeError, TypeError):
+    pass
+_yyb_atexit.register(_yyb_push_notification)
 # === YYB_GO 统一通知注入 end ===
 
 # name: 途虎养车
@@ -105,15 +191,14 @@ from urllib.parse import quote
 
 import requests
 
-
 APP_NAME = "途虎养车小程序"
 APPID = "wx27d20205249c56a3"
 
 # 从环境变量 YYB_GO 读取内网服务，多条换行分隔
 SERVERS = []
-env_YYB_GO = os.getenv("YYB_GO", "")
-if env_YYB_GO:
-    raw_lines = env_YYB_GO.splitlines()
+env_yyb_go = os.getenv("YYB_GO", "")
+if env_yyb_go:
+    raw_lines = env_yyb_go.splitlines()
     SERVERS = [line.strip() for line in raw_lines if line.strip()]
 
 # 无有效地址直接退出并提示
@@ -235,8 +320,12 @@ def parse_proxy_response(text: Any) -> Dict[str, Any] | None:
                 return {
                     "host": str(host),
                     "port": int(port),
-                    "username": proxy_obj.get("user") or proxy_obj.get("username") or "",
-                    "password": proxy_obj.get("pass") or proxy_obj.get("password") or "",
+                    "username": proxy_obj.get("user")
+                    or proxy_obj.get("username")
+                    or "",
+                    "password": proxy_obj.get("pass")
+                    or proxy_obj.get("password")
+                    or "",
                 }
     except Exception:
         pass
@@ -401,6 +490,7 @@ def parse_yyb_go_entry(raw_value):
 
     return server, ref
 
+
 def get_code(server: str) -> str | None:
     parsed_server, ref = parse_yyb_go_entry(server)
     if not parsed_server or not ref:
@@ -417,7 +507,7 @@ def get_code(server: str) -> str | None:
             proxies={"http": None, "https": None},
         )
         data = res.json()
-        code = (((data.get("data") or {}).get("result") or {}).get("code"))
+        code = ((data.get("data") or {}).get("result") or {}).get("code")
 
         if data.get("code") != 0 or not code:
             print(f"[{parsed_server}] 获取code失败：{data}")
@@ -429,17 +519,23 @@ def get_code(server: str) -> str | None:
         print(f"[{parsed_server}] 获取code异常：{exc}")
         return None
 
+
 def common_headers(user_session: str | None = None) -> Dict[str, str]:
     headers = {
         "Host": "cl-gateway.tuhu.cn",
         "Connection": "keep-alive",
         "orion_biz_gps_latitude": "22.787150540279182",
-        "orion_biz_gps_province": "%E5%B9%BF%E8%A5%BF%E5%A3%AE%E6%97%8F%E8%87%AA%E6%B2%BB%E5%8C%BA",
+        "orion_biz_gps_province": (
+            "%E5%B9%BF%E8%A5%BF%E5%A3%AE%E6%97%8F%E8%87%AA%E6%B2%BB%E5%8C%BA"
+        ),
         "xweb_xhr": "1",
         "distinct_id": "6a68cbca-ce9a-4b0e-8092-cc5a85cf9a85",
         "currentPage": "memberMallPackage/pages/pointCenter/pointCenter",
         "orion_biz_gps_city": "%E5%8D%97%E5%AE%81%E5%B8%82",
-        "deviceId": f"{int(time.time() * 1000)}-{random.randint(1000000, 9999999)}-0f6cb850fc64da-24853921",
+        "deviceId": (
+            f"{int(time.time() * 1000)}-{random.randint(1000000, 9999999)}"
+            "-0f6cb850fc64da-24853921"
+        ),
         "authType": "oauth",
         "api_level": "2",
         "vehicleClass": "CAR",
@@ -464,7 +560,9 @@ def common_headers(user_session: str | None = None) -> Dict[str, str]:
     return headers
 
 
-def login_by_code(server: str, code: str, proxies: Dict[str, str] | None) -> Tuple[str | None, str, Dict[str, Any] | None]:
+def login_by_code(
+    server: str, code: str, proxies: Dict[str, str] | None
+) -> Tuple[str | None, str, Dict[str, Any] | None]:
     print("🔐 [登录] 使用 code 换 userSession")
 
     payload = {
@@ -503,7 +601,9 @@ def login_by_code(server: str, code: str, proxies: Dict[str, str] | None) -> Tup
         return None, "-", None
 
 
-def api_post(server: str, url: str, user_session: str, proxies: Dict[str, str] | None) -> Dict[str, Any]:
+def api_post(
+    server: str, url: str, user_session: str, proxies: Dict[str, str] | None
+) -> Dict[str, Any]:
     payload = {
         "channel": "WXAPP",
     }
@@ -537,7 +637,9 @@ def parse_sign_info(data: Dict[str, Any]) -> Tuple[bool | None, int]:
     return sign_status, user_integral
 
 
-def get_sign_info(server: str, user_session: str, proxies: Dict[str, str] | None) -> Tuple[bool | None, int, Dict[str, Any]]:
+def get_sign_info(
+    server: str, user_session: str, proxies: Dict[str, str] | None
+) -> Tuple[bool | None, int, Dict[str, Any]]:
     data = api_post(server, SIGN_INFO_URL, user_session, proxies)
     sign_status, user_integral = parse_sign_info(data)
 
@@ -549,7 +651,9 @@ def get_sign_info(server: str, user_session: str, proxies: Dict[str, str] | None
     return sign_status, user_integral, data
 
 
-def submit_signin(server: str, user_session: str, proxies: Dict[str, str] | None) -> Tuple[bool, str, int, int]:
+def submit_signin(
+    server: str, user_session: str, proxies: Dict[str, str] | None
+) -> Tuple[bool, str, int, int]:
     data = api_post(server, SIGN_SUBMIT_URL, user_session, proxies)
 
     if data.get("code") == 10000:
@@ -608,7 +712,9 @@ def run_account(index: int, total: int, server: str) -> Dict[str, Any]:
 
     try:
         print("📊 [积分] 查询签到前积分和状态...")
-        sign_status, before_integral, raw_info = get_sign_info(server, user_session, proxies)
+        sign_status, before_integral, raw_info = get_sign_info(
+            server, user_session, proxies
+        )
 
         if sign_status is None:
             result["error"] = f"查询签到状态失败: {json_preview(raw_info)}"
@@ -623,7 +729,9 @@ def run_account(index: int, total: int, server: str) -> Dict[str, Any]:
             print("✅ [签到] 今日已签到")
         else:
             print("📝 [签到] 未签到，开始签到...")
-            sign_ok, sign_msg, reward_integral, _ = submit_signin(server, user_session, proxies)
+            sign_ok, sign_msg, reward_integral, _ = submit_signin(
+                server, user_session, proxies
+            )
             result["signMsg"] = sign_msg
             result["earnedIntegral"] = str(reward_integral)
 
@@ -654,7 +762,9 @@ def run_account(index: int, total: int, server: str) -> Dict[str, Any]:
 def build_notify(results: List[Dict[str, Any]]) -> str:
     success_count = sum(1 for item in results if item["success"])
     fail_count = len(results) - success_count
-    total_earned = sum(to_int(item.get("earnedIntegral", 0)) for item in results if item.get("success"))
+    total_earned = sum(
+        to_int(item.get("earnedIntegral", 0)) for item in results if item.get("success")
+    )
 
     content = f"""🚗 途虎养车多账号任务结果
 
@@ -701,19 +811,21 @@ def main() -> None:
             results.append(result)
         except Exception as exc:
             print(f"❌ [主程序] {server} 执行异常: {exc}")
-            results.append({
-                "server": server,
-                "success": False,
-                "proxyStatus": "-",
-                "proxyIp": "-",
-                "nickname": "-",
-                "session": "-",
-                "signMsg": "-",
-                "beforeIntegral": "0",
-                "afterIntegral": "0",
-                "earnedIntegral": "0",
-                "error": traceback.format_exc().strip(),
-            })
+            results.append(
+                {
+                    "server": server,
+                    "success": False,
+                    "proxyStatus": "-",
+                    "proxyIp": "-",
+                    "nickname": "-",
+                    "session": "-",
+                    "signMsg": "-",
+                    "beforeIntegral": "0",
+                    "afterIntegral": "0",
+                    "earnedIntegral": "0",
+                    "error": traceback.format_exc().strip(),
+                }
+            )
 
         if index < len(SERVERS):
             print("⏳ [间隔] 等待 2s 后处理下一个账号")

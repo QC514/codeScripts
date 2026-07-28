@@ -1,68 +1,124 @@
 // === YYB_GO 统一通知注入 begin ===
-(function () {
-  const __logs = [];
-  const __oL = console.log.bind(console);
-  console.log = function (...a) { try { __logs.push(a.map(x => (x && x.stack) ? x.stack : String(x)).join(' ')); } catch (e) {} __oL(...a); };
-  const __oE = console.error.bind(console);
-  console.error = function (...a) { try { __logs.push('[ERR] ' + a.map(x => (x && x.stack) ? x.stack : String(x)).join(' ')); } catch (e) {} __oE(...a); };
+(function installYybOutputCapture() {
+  const stateKey = Symbol.for("yyb.output.capture");
+  if (globalThis[stateKey]) return;
 
-  function __resolveKey() {
-    let k = process.env.QYWX_KEY || process.env.QYWX || process.env.WEWORK_KEY;
-    if (k) return k;
+  const childProcess = require("child_process");
+  const fs = require("fs");
+  const util = require("util");
+  const state = { exiting: false, flushed: false, logs: [] };
+  globalThis[stateKey] = state;
+
+  const originalConsole = {
+    error: console.error.bind(console),
+    log: console.log.bind(console),
+    warn: console.warn.bind(console),
+  };
+
+  function capture(prefix, args) {
     try {
-      const fs = require('fs');
-      let p = null;
-      try { p = require.resolve('./sendNotify'); } catch (e) { try { p = require.resolve('/ql/data/scripts/sendNotify'); } catch (e2) {} }
-      if (p) {
-        const t = fs.readFileSync(p, 'utf-8');
-        const m = t.match(/QYWX_KEY\s*=\s*['"]([^'"]+)['"]/);
-        if (m) return m[1];
+      const text = util.format(...args);
+      for (const line of text.split(/\r?\n/)) {
+        if (line) state.logs.push(`${prefix}${line}`);
       }
-    } catch (e) {}
+    } catch (_) {}
+  }
+
+  console.log = (...args) => {
+    capture("", args);
+    originalConsole.log(...args);
+  };
+  console.warn = (...args) => {
+    capture("[warn] ", args);
+    originalConsole.warn(...args);
+  };
+  console.error = (...args) => {
+    capture("[stderr] ", args);
+    originalConsole.error(...args);
+  };
+
+  function resolveKey() {
+    const environmentKey =
+      process.env.QYWX_KEY || process.env.QYWX || process.env.WEWORK_KEY;
+    if (environmentKey) return environmentKey;
+
+    for (const candidate of ["./sendNotify", "/ql/data/scripts/sendNotify"]) {
+      try {
+        const path = require.resolve(candidate);
+        const source = fs.readFileSync(path, "utf8");
+        const match = source.match(/QYWX_KEY\s*=\s*["']([^"']+)["']/);
+        if (match) return match[1];
+      } catch (_) {}
+    }
     return null;
   }
 
-  let __flushed = false;
-  function __flush() {
-    if (__flushed) return;
-    __flushed = true;
-    const title = (process.argv[1] || 'YYB_GO').split(/[\/]/).pop();
-    const body = __logs.slice(-40).join('\n');
-    // 1) 显式调用 sendNotify.js（满足要求）；临时静音其可能产生的报错，避免误导
-    const _ol = console.log, _oe = console.error;
-    console.log = function () {}; console.error = function () {};
-    try {
-      let sn;
-      try { sn = require('./sendNotify'); } catch (e) { try { sn = require('/ql/data/scripts/sendNotify'); } catch (e2) { sn = null; } }
-      if (sn) {
-        if (typeof sn === 'function') { try { sn(title, body); } catch (e) {} }
-        else if (sn.sendNotify && typeof sn.sendNotify === 'function') { try { sn.sendNotify(title, body); } catch (e) {} }
-      }
-    } catch (e) {}
-    console.log = _ol; console.error = _oe;
-    // 2) 兜底：同步 curl POST 企业微信机器人 webhook（绕过损坏的 sendNotify.js，确保送达）
-    try {
-      const key = __resolveKey();
-      if (key) {
-        const fs = require('fs');
-        const cp = require('child_process');
-        const tmp = '/tmp/yyb_notify_' + process.pid + '.json';
-        fs.writeFileSync(tmp, JSON.stringify({ msgtype: 'text', text: { content: '【' + title + '】\n' + body } }));
-        cp.execSync('curl -s -m 15 -X POST -H "Content-Type: application/json" --data @' + tmp + ' "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=' + key + '"', { stdio: 'ignore' });
-        try { fs.unlinkSync(tmp); } catch (e) {}
-      }
-    } catch (e) {}
+  function trySendNotify(title, body) {
+    for (const candidate of ["./sendNotify", "/ql/data/scripts/sendNotify"]) {
+      try {
+        const notifyModule = require(candidate);
+        const sendNotify =
+          typeof notifyModule === "function"
+            ? notifyModule
+            : notifyModule && notifyModule.sendNotify;
+        if (typeof sendNotify === "function") {
+          sendNotify(title, body);
+          return true;
+        }
+      } catch (_) {}
+    }
+    return false;
   }
 
-  let __exiting = false;
-  const __origExit = (typeof process.exit === 'function') ? process.exit.bind(process) : function (c) { throw new Error('exit ' + c); };
-  process.exit = function (code) {
-    if (__exiting) return __origExit(code);
-    __exiting = true;
-    try { __flush(); } catch (e) {}
-    return __origExit(code);
+  function sendWebhook(key, title, body) {
+    const payload = JSON.stringify({
+      msgtype: "text",
+      text: { content: `【${title}】\n${body}` },
+    });
+    childProcess.spawnSync(
+      "curl",
+      [
+        "--silent",
+        "--show-error",
+        "--max-time",
+        "15",
+        "--request",
+        "POST",
+        "--header",
+        "Content-Type: application/json",
+        "--data-binary",
+        "@-",
+        `https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=${key}`,
+      ],
+      { input: payload, stdio: ["pipe", "ignore", "ignore"] },
+    );
+  }
+
+  function flushNotification() {
+    if (state.flushed) return;
+    state.flushed = true;
+
+    const title = (process.argv[1] || "YYB_GO").split(/[\\/]/).pop();
+    const body =
+      state.logs.slice(-40).join("\n") || "任务执行完成，无日志输出。";
+    if (trySendNotify(title, body)) return;
+
+    const key = resolveKey();
+    if (key) sendWebhook(key, title, body);
+  }
+
+  const originalExit = process.exit.bind(process);
+  process.exit = (code) => {
+    if (state.exiting) return originalExit(code);
+    state.exiting = true;
+    flushNotification();
+    return originalExit(code);
   };
-  process.on('beforeExit', () => { if (!__exiting) { __exiting = true; try { __flush(); } catch (e) {} } });
+  process.on("beforeExit", () => {
+    if (state.exiting) return;
+    state.exiting = true;
+    flushNotification();
+  });
 })();
 // === YYB_GO 统一通知注入 end ===
 

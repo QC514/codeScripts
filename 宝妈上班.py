@@ -18,11 +18,15 @@
 ------------------------------------------------------------
 环境变量 (青龙面板添加):
   必需:
-    YYB_GO                - YYB_GO 取码服务 (格式 地址@微信账号标识, 可多行=多账号; 每个微信独立取码并自动续期 token)
+    YYB_GO                - YYB_GO 取码服务 (格式 地址@微信账号标识,
+                            可多行=多账号; 每个微信独立取码并自动续期 token)
   可选:
-    WOLF_UID              - 你自己的用户ID [多账号可留空! 脚本登录后会自动从响应提取每个账号的 uid]
-    WOLF_UNI_ID_TOKEN     - uniIdToken(JWT)  [首次运行填一个即可; 之后脚本自动续期, 可留空]
-    WOLF_YYB_GO_ENTRY    - 指定只跑 YYB_GO 中某一行账号 (填完整行, 如 172.17.0.4:8000@xxx); 不填则自动遍历所有行 (多账号)
+    WOLF_UID              - 你自己的用户ID [多账号可留空! 脚本登录后会自动
+                            从响应提取每个账号的 uid]
+    WOLF_UNI_ID_TOKEN     - uniIdToken(JWT) [首次运行填一个即可; 之后脚本
+                            自动续期, 可留空]
+    WOLF_YYB_GO_ENTRY     - 指定只跑 YYB_GO 中某一行账号 (填完整行, 如
+                            172.17.0.4:8000@xxx); 不填则遍历所有行
     WOLF_MAX_RUNS         - 每次运行最大调用次数 (默认 20)
     WOLF_QYWX_KEY         - 企业微信Webhook Key (运行结果通知, 可选)
     WOLF_APPID            - 目标小程序appid (默认 wxe6cb23a7f02277ed = 宝妈上班, 不变)
@@ -37,86 +41,174 @@
   * accessToken(x-basement-token) 每次运行自动获取, 无需手动填写
   * clientSecret 已内置, 无需填写
   * 续期条件: token 剩余有效期 < WOLF_RENEW_HOURS (默认 12) 小时, 或 token 缺失/解析失败
-  * 续期成功后写入脚本同目录 wolf_token_cache_{账号ref}.json (按账号隔离); 下次运行优先使用各账号缓存中最新且有效的 token
+  * 续期成功后写入脚本同目录 wolf_token_cache_{账号ref}.json (按账号隔离);
+    下次运行优先使用各账号缓存中最新且有效的 token
 """
 
-import re
-
 # === YYB_GO 统一通知注入 begin ===
-import os as __os, sys as __sys, io as __io, atexit as __atexit, re as __re
+import atexit as _yyb_atexit
+import importlib as _yyb_importlib
+import json as _yyb_json
+import os as _yyb_os
+import re
+import re as _yyb_re
+import sys as _yyb_sys
+import urllib.request as _yyb_url_request
+
+_YYB_KEY_NAMES = ("WOLF_QYWX_KEY", "QYWX_KEY", "QYWX", "WEWORK_KEY")
+_YYB_LOG_LIMIT = 40
 _yyb_logs = []
-class __LogHook(__io.TextIOBase):
-    def __init__(self, s): self._s = s
-    def write(self, s):
-        if s and s != '\n': _yyb_logs.append(s.rstrip('\n'))
-        self._s.write(s); return len(s)
-    def flush(self): self._s.flush()
-if not isinstance(__sys.stdout, __LogHook): __sys.stdout = __LogHook(__sys.stdout)
-if not isinstance(__sys.stderr, __LogHook): __sys.stderr = __LogHook(__sys.stderr)
+_yyb_notification_sent = False
 
-__pushed = False
-def __push():
-    global __pushed
-    if __pushed: return
-    try:
-        body = '\n'.join(_yyb_logs[-40:])
-        title = __os.path.basename(__sys.argv[0]) if __sys.argv else 'YYB_GO'
-        sn = None
-        try:
-            from sendNotify import sendNotify as _sn
-            sn = _sn
-        except Exception:
-            sn = None
-        if sn and callable(sn):
-            try: sn(title, body); return
-            except Exception: pass
-        key = __resolve_key()
+
+class _YybLogStream:
+    """Mirror a stream and collect complete lines for the final notification."""
+
+    _yyb_output_capture = True
+
+    def __init__(self, stream, prefix=""):
+        self._stream = stream
+        self._prefix = prefix
+        self._buffer = ""
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+    def _capture(self, text):
+        text = text.rstrip("\r")
+        if text:
+            _yyb_logs.append(f"{self._prefix}{text}")
+
+    def capture_pending(self):
+        if self._buffer:
+            self._capture(self._buffer)
+            self._buffer = ""
+
+    def flush(self):
+        self.capture_pending()
+        self._stream.flush()
+
+    def write(self, text):
+        written = self._stream.write(text)
+        self._buffer += text
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            self._capture(line)
+        return written
+
+    def writelines(self, lines):
+        for line in lines:
+            self.write(line)
+
+
+def _yyb_install_output_capture():
+    if not getattr(_yyb_sys.stdout, "_yyb_output_capture", False):
+        _yyb_sys.stdout = _YybLogStream(_yyb_sys.stdout)
+    if not getattr(_yyb_sys.stderr, "_yyb_output_capture", False):
+        _yyb_sys.stderr = _YybLogStream(_yyb_sys.stderr, "[stderr] ")
+
+
+def _yyb_flush_captured_output():
+    for stream in (_yyb_sys.stdout, _yyb_sys.stderr):
+        capture_pending = getattr(stream, "capture_pending", None)
+        if callable(capture_pending):
+            capture_pending()
+
+
+def _yyb_resolve_key():
+    for name in _YYB_KEY_NAMES:
+        key = _yyb_os.environ.get(name)
         if key:
-            import json as __json, urllib.request as __ur
-            data = __json.dumps({'msgtype':'text','text':{'content':f'【{title}】\n{body}'}}).encode('utf-8')
-            req = __ur.Request(f'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}', data=data, headers={'Content-Type':'application/json'})
-            __ur.urlopen(req, timeout=15)
-    except Exception:
-        pass
-    __pushed = True
+            return key
 
-def __resolve_key():
-    k = __os.environ.get('WOLF_QYWX_KEY') or __os.environ.get('QYWX_KEY') or __os.environ.get('QYWX') or __os.environ.get('WEWORK_KEY')
-    if k: return k
-    for cand in ('sendNotify.js', '/ql/data/scripts/sendNotify.js'):
+    for candidate in ("sendNotify.js", "/ql/data/scripts/sendNotify.js"):
         try:
-            t = open(cand, encoding='utf-8').read()
-            m = __re.search(r"QYWX_KEY\s*=\s*'([^']+)'", t)
-            if not m:
-                m = __re.search(r'QYWX_KEY\s*=\s*"([^"]+)"', t)
-            if m: return m.group(1)
-        except Exception:
-            pass
+            with open(candidate, encoding="utf-8") as notify_file:
+                source = notify_file.read()
+            match = _yyb_re.search(r"QYWX_KEY\s*=\s*['\"]([^'\"]+)['\"]", source)
+            if match:
+                return match.group(1)
+        except (OSError, UnicodeError):
+            continue
     return None
 
-__orig_os_exit = __os._exit
-def __patched_os_exit(code=0):
-    global __pushed
-    if __pushed:
-        return __orig_os_exit(code)
-    __pushed = True
-    try: __push()
-    except Exception: pass
-    return __orig_os_exit(code)
-try: __os._exit = __patched_os_exit
-except Exception: pass
 
-__atexit.register(__push)
+def _yyb_build_notification():
+    _yyb_flush_captured_output()
+    title = _yyb_os.path.basename(_yyb_sys.argv[0]) if _yyb_sys.argv else "YYB_GO"
+    body = "\n".join(_yyb_logs[-_YYB_LOG_LIMIT:])
+    return title, body or "任务执行完成，无日志输出。"
+
+
+def _yyb_push_notification():
+    global _yyb_notification_sent
+
+    if _yyb_notification_sent:
+        return
+    _yyb_notification_sent = True
+
+    try:
+        title, body = _yyb_build_notification()
+        try:
+            notify_module = _yyb_importlib.import_module("sendNotify")
+            send_notify = getattr(notify_module, "sendNotify", None)
+        except ImportError:
+            send_notify = None
+
+        if callable(send_notify):
+            try:
+                send_notify(title, body)
+                return
+            except Exception:
+                pass
+
+        key = _yyb_resolve_key()
+        if not key:
+            return
+
+        payload = _yyb_json.dumps(
+            {
+                "msgtype": "text",
+                "text": {"content": f"【{title}】\n{body}"},
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+        request = _yyb_url_request.Request(
+            f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        with _yyb_url_request.urlopen(request, timeout=15):
+            pass
+    except Exception:
+        pass
+
+
+_yyb_original_os_exit = _yyb_os._exit
+
+
+def _yyb_patched_os_exit(code=0):
+    _yyb_push_notification()
+    _yyb_original_os_exit(code)
+
+
+_yyb_install_output_capture()
+try:
+    _yyb_os._exit = _yyb_patched_os_exit
+except (AttributeError, TypeError):
+    pass
+_yyb_atexit.register(_yyb_push_notification)
 # === YYB_GO 统一通知注入 end ===
 
-import hmac
-import hashlib
-import json
-import time
-import random
-import os
-import sys
 import base64
+import hashlib
+import hmac
+import json
+import os
+import random
+import sys
+import time
+
 import requests
 
 # ============ 常量配置 (已从wxapkg提取 / 已逆向验证) ============
@@ -146,12 +238,15 @@ _access_token = ""
 _token_expire_time = 0
 
 # token 缓存文件 (集中存放在脚本同目录下的专用文件夹, 不与脚本混放)
-TOKEN_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wolf_token_caches")
+TOKEN_CACHE_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "wolf_token_caches"
+)
 CACHE_PATH = os.path.join(TOKEN_CACHE_DIR, "wolf_token_cache.json")
 
 
 # ============ YYB_GO 取码服务 (地址@微信账号标识 多行) ============
 YYB_GO_RAW = os.environ.get("YYB_GO", "")
+
 
 def parse_yyb_go_entry(raw):
     value = (raw or "").strip()
@@ -162,7 +257,7 @@ def parse_yyb_go_entry(raw):
         print(f"  [YYB_GO] 格式应为 地址@微信账号标识, 当前值: {value}")
         return None, None
     server = value[:at].strip()
-    ref = value[at + 1:].strip()
+    ref = value[at + 1 :].strip()
     if server.startswith("http://"):
         server = server[7:]
     elif server.startswith("https://"):
@@ -171,6 +266,7 @@ def parse_yyb_go_entry(raw):
     if not server or not ref:
         return None, None
     return server, ref
+
 
 def get_yyb_go_code(entry):
     """通过 YYB_GO 服务获取指定账号的微信登录 code (entry 格式: 地址@微信账号标识)"""
@@ -182,10 +278,15 @@ def get_yyb_go_code(entry):
         return None
     try:
         url = f"http://{server}/wxapp/getCode"
-        r = requests.post(url, json={"ref": ref, "app_id": TARGET_APPID}, timeout=20).json()
+        r = requests.post(
+            url, json={"ref": ref, "app_id": TARGET_APPID}, timeout=20
+        ).json()
         code = r.get("data", {}).get("result", {}).get("code")
         if r.get("code") != 0 or not code:
-            print(f"  [YYB_GO] 取码失败 ({ref}): {json.dumps(r, ensure_ascii=False)[:200]}")
+            print(
+                f"  [YYB_GO] 取码失败 ({ref}): "
+                f"{json.dumps(r, ensure_ascii=False)[:200]}"
+            )
             return None
         print(f"  [YYB_GO] 取码成功 ({server})")
         return code
@@ -255,14 +356,28 @@ def get_access_token():
 
 def build_client_info():
     return {
-        "PLATFORM": "mp-weixin", "OS": "android", "APPID": UNI_APPID,
-        "DEVICEID": str(random.randint(10**18, 10**19 - 1)), "scene": 1011,
-        "appId": UNI_APPID, "appName": APP_NAME, "appVersion": "1.0.0",
-        "appVersionCode": "100", "appLanguage": "zh-Hans", "hostVersion": "8.0.71",
-        "hostName": "WeChat", "uniPlatform": "mp-weixin", "uniCompilerVersion": "5.07",
-        "uniRuntimeVersion": "5.07", "deviceType": "phone", "deviceBrand": "redmi",
-        "deviceModel": "Redmi K30 Pro", "osName": "android", "osVersion": "12",
-        "locale": "zh-Hans", "LOCALE": "zh-Hans",
+        "PLATFORM": "mp-weixin",
+        "OS": "android",
+        "APPID": UNI_APPID,
+        "DEVICEID": str(random.randint(10**18, 10**19 - 1)),
+        "scene": 1011,
+        "appId": UNI_APPID,
+        "appName": APP_NAME,
+        "appVersion": "1.0.0",
+        "appVersionCode": "100",
+        "appLanguage": "zh-Hans",
+        "hostVersion": "8.0.71",
+        "hostName": "WeChat",
+        "uniPlatform": "mp-weixin",
+        "uniCompilerVersion": "5.07",
+        "uniRuntimeVersion": "5.07",
+        "deviceType": "phone",
+        "deviceBrand": "redmi",
+        "deviceModel": "Redmi K30 Pro",
+        "osName": "android",
+        "osVersion": "12",
+        "locale": "zh-Hans",
+        "LOCALE": "zh-Hans",
     }
 
 
@@ -279,9 +394,14 @@ def call_api(function_target, function_args, retry_on_token_expired=True):
     ts = int(time.time() * 1000)
     body = {
         "method": "serverless.function.runtime.invoke",
-        "params": json.dumps({"functionTarget": function_target, "functionArgs": args},
-                             ensure_ascii=False, separators=(",", ":")),
-        "spaceId": SPACE_ID, "timestamp": ts, "token": token,
+        "params": json.dumps(
+            {"functionTarget": function_target, "functionArgs": args},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+        "spaceId": SPACE_ID,
+        "timestamp": ts,
+        "token": token,
     }
     h = _headers({"x-basement-token": token, "x-serverless-sign": generate_sign(body)})
     try:
@@ -291,8 +411,11 @@ def call_api(function_target, function_args, retry_on_token_expired=True):
             if err.get("code") == "GATEWAY_INVALID_TOKEN":
                 print("  [call_api] accessToken 过期, 刷新重试...")
                 global _access_token, _token_expire_time
-                _access_token = ""; _token_expire_time = 0
-                return call_api(function_target, function_args, retry_on_token_expired=False)
+                _access_token = ""
+                _token_expire_time = 0
+                return call_api(
+                    function_target, function_args, retry_on_token_expired=False
+                )
         return resp
     except Exception as e:
         print(f"  [call_api] 异常: {e}")
@@ -317,7 +440,7 @@ def cache_path_for(entry):
     _, ref = parse_yyb_go_entry(entry)
     if not ref:
         ref = "default"
-    safe = re.sub(r'[^A-Za-z0-9]', '_', ref)[:48]
+    safe = re.sub(r"[^A-Za-z0-9]", "_", ref)[:48]
     os.makedirs(TOKEN_CACHE_DIR, exist_ok=True)
     return os.path.join(TOKEN_CACHE_DIR, f"wolf_token_cache_{safe}.json")
 
@@ -339,8 +462,16 @@ def save_cache(token, path=None):
         os.makedirs(os.path.dirname(p), exist_ok=True)
         rem = jwt_remaining_hours(token)
         with open(p, "w", encoding="utf-8") as f:
-            json.dump({"token": token, "saved_at": int(time.time()),
-                       "expired": int(time.time()) + (rem * 3600 if rem else 0)}, f, ensure_ascii=False, indent=2)
+            json.dump(
+                {
+                    "token": token,
+                    "saved_at": int(time.time()),
+                    "expired": int(time.time()) + (rem * 3600 if rem else 0),
+                },
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
         print(f"  [cache] 已写入本地缓存, 有效期剩余约 {rem:.1f}h")
     except Exception as e:
         print(f"  [cache] 写入失败: {e}")
@@ -368,13 +499,22 @@ def renew_token(entry):
         return None
 
     print("  [续期] 步骤3: loginByWeixin 换取新 uniIdToken ...")
-    fa = {"method": "loginByWeixin", "params": [{"code": code}], "clientInfo": build_client_info()}
+    fa = {
+        "method": "loginByWeixin",
+        "params": [{"code": code}],
+        "clientInfo": build_client_info(),
+    }
     ts = int(time.time() * 1000)
     body = {
         "method": "serverless.function.runtime.invoke",
-        "params": json.dumps({"functionTarget": "uni-id-co", "functionArgs": fa},
-                             ensure_ascii=False, separators=(",", ":")),
-        "spaceId": SPACE_ID, "timestamp": ts, "token": at,
+        "params": json.dumps(
+            {"functionTarget": "uni-id-co", "functionArgs": fa},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+        "spaceId": SPACE_ID,
+        "timestamp": ts,
+        "token": at,
     }
     h = _headers({"x-basement-token": at, "x-serverless-sign": generate_sign(body)})
     try:
@@ -383,12 +523,20 @@ def renew_token(entry):
         print(f"  [续期] loginByWeixin 异常: {e}")
         return None
     if not resp.get("success"):
-        print(f"  [续期] loginByWeixin 失败: {json.dumps(resp, ensure_ascii=False)[:200]}")
+        print(
+            f"  [续期] loginByWeixin 失败: {json.dumps(resp, ensure_ascii=False)[:200]}"
+        )
         return None
     data = resp.get("data", {})
-    new_token = data.get("newToken", {}).get("token") or data.get("token") or data.get("uniIdToken")
+    new_token = (
+        data.get("newToken", {}).get("token")
+        or data.get("token")
+        or data.get("uniIdToken")
+    )
     if not new_token:
-        print(f"  [续期] 响应中未找到 token: {json.dumps(resp, ensure_ascii=False)[:200]}")
+        print(
+            f"  [续期] 响应中未找到 token: {json.dumps(resp, ensure_ascii=False)[:200]}"
+        )
         return None
     print("  [续期] 成功获取新 uniIdToken ✅")
     return new_token
@@ -419,7 +567,9 @@ def resolve_token(entry, allow_env=True):
 
     # 需要续期的情况
     if best is None or best_rem < RENEW_HOURS:
-        reason = "无有效token" if best is None else f"剩余 {best_rem:.1f}h < {RENEW_HOURS}h"
+        reason = (
+            "无有效token" if best is None else f"剩余 {best_rem:.1f}h < {RENEW_HOURS}h"
+        )
         print(f"[token] 需要续期 ({reason})")
         new_tok = renew_token(entry)
         if new_tok:
@@ -441,16 +591,21 @@ def update_qinglong_env(name, value):
         return False
     try:
         # 1) 获取青龙 openapi token
-        r = requests.get(f"{QL_URL}/open/auth/token",
-                         params={"client_id": QL_CLIENT_ID, "client_secret": QL_CLIENT_SECRET},
-                         timeout=15).json()
+        r = requests.get(
+            f"{QL_URL}/open/auth/token",
+            params={"client_id": QL_CLIENT_ID, "client_secret": QL_CLIENT_SECRET},
+            timeout=15,
+        ).json()
         if r.get("code") != 200:
             print(f"  [青龙] 获取token失败: {r.get('message')}")
             return False
         ql_token = r["data"]["token"]
         # 2) 查找环境变量
-        r = requests.get(f"{QL_URL}/api/env",
-                         params={"searchValue": name, "token": ql_token}, timeout=15).json()
+        r = requests.get(
+            f"{QL_URL}/api/env",
+            params={"searchValue": name, "token": ql_token},
+            timeout=15,
+        ).json()
         env_id = None
         if r.get("code") == 200:
             for item in r.get("data", {}).get("content", []):
@@ -459,13 +614,24 @@ def update_qinglong_env(name, value):
                     break
         # 3) 更新或创建
         if env_id:
-            body = [{"id": env_id, "name": name, "value": value, "remarks": "auto-renewed by wolf_bmbsh"}]
-            r = requests.put(f"{QL_URL}/api/env", json=body,
-                             params={"token": ql_token}, timeout=15).json()
+            body = [
+                {
+                    "id": env_id,
+                    "name": name,
+                    "value": value,
+                    "remarks": "auto-renewed by wolf_bmbsh",
+                }
+            ]
+            r = requests.put(
+                f"{QL_URL}/api/env", json=body, params={"token": ql_token}, timeout=15
+            ).json()
         else:
-            body = [{"name": name, "value": value, "remarks": "auto-renewed by wolf_bmbsh"}]
-            r = requests.post(f"{QL_URL}/api/env", json=body,
-                              params={"token": ql_token}, timeout=15).json()
+            body = [
+                {"name": name, "value": value, "remarks": "auto-renewed by wolf_bmbsh"}
+            ]
+            r = requests.post(
+                f"{QL_URL}/api/env", json=body, params={"token": ql_token}, timeout=15
+            ).json()
         if r.get("code") == 200:
             print(f"  [青龙] 已更新环境变量 {name}")
             return True
@@ -478,27 +644,53 @@ def update_qinglong_env(name, value):
 
 # ============ 业务逻辑 ============
 def create_contribution():
-    return call_api("wolf-order", {"method": "createContribution", "params": [{"uid": UID}]})
+    return call_api(
+        "wolf-order", {"method": "createContribution", "params": [{"uid": UID}]}
+    )
 
 
 def get_daily_count():
     now_ts = int(time.time() * 1000)
     beijing = (int(time.time()) + 8 * 3600) % 86400
     today_start_ms = (int(time.time()) - beijing) * 1000
-    return call_api("DCloud-clientDB", {"command": {"$db": [
-        {"$method": "collection", "$param": ["wolf-contribution"]},
-        {"$method": "where", "$param": [f'uid=="{UID}" && create_time>{today_start_ms} && type==0']},
-        {"$method": "count", "$param": []},
-    ]}})
+    return call_api(
+        "DCloud-clientDB",
+        {
+            "command": {
+                "$db": [
+                    {"$method": "collection", "$param": ["wolf-contribution"]},
+                    {
+                        "$method": "where",
+                        "$param": [
+                            f'uid=="{UID}" && create_time>{today_start_ms} && type==0'
+                        ],
+                    },
+                    {"$method": "count", "$param": []},
+                ]
+            }
+        },
+    )
 
 
 def get_user_info():
-    return call_api("DCloud-clientDB", {"command": {"$db": [
-        {"$method": "collection", "$param": ["uni-id-users"]},
-        {"$method": "where", "$param": ["'_id' == $cloudEnv_uid"]},
-        {"$method": "field", "$param": ["uid,_id,mobile,nickname,my_invite_code,money,score,level"]},
-        {"$method": "get", "$param": []},
-    ]}})
+    return call_api(
+        "DCloud-clientDB",
+        {
+            "command": {
+                "$db": [
+                    {"$method": "collection", "$param": ["uni-id-users"]},
+                    {"$method": "where", "$param": ["'_id' == $cloudEnv_uid"]},
+                    {
+                        "$method": "field",
+                        "$param": [
+                            "uid,_id,mobile,nickname,my_invite_code,money,score,level"
+                        ],
+                    },
+                    {"$method": "get", "$param": []},
+                ]
+            }
+        },
+    )
 
 
 def extract_uid():
@@ -524,15 +716,27 @@ def run_account(entry, allow_env=True):
     server, ref = parse_yyb_go_entry(entry)
     if not server or not ref:
         print(f"\n  [账号] 跳过无效 entry: {entry}")
-        return {"entry": entry, "ok": False, "reason": "无效 entry", "earned": 0, "success": 0}
-    print(f"\n{'#'*60}\n# 账号: {server} @ {ref}\n{'#'*60}")
+        return {
+            "entry": entry,
+            "ok": False,
+            "reason": "无效 entry",
+            "earned": 0,
+            "success": 0,
+        }
+    print(f"\n{'#' * 60}\n# 账号: {server} @ {ref}\n{'#' * 60}")
 
     # 1) token (按账号隔离; 多账号模式禁用 env 共享)
     print("\n[1/4] 解析并校验 uniIdToken ...")
     token, src = resolve_token(entry, allow_env=allow_env)
     if not token:
         print("  无法获取有效 token, 跳过该账号")
-        return {"entry": entry, "ok": False, "reason": "no token", "earned": 0, "success": 0}
+        return {
+            "entry": entry,
+            "ok": False,
+            "reason": "no token",
+            "earned": 0,
+            "success": 0,
+        }
     global UNI_ID_TOKEN, UID
     UNI_ID_TOKEN = token  # 后续业务调用使用续期后的 token
 
@@ -541,7 +745,13 @@ def run_account(entry, allow_env=True):
     acc_uid = extract_uid()
     if not acc_uid:
         print("  无法获取该账号 uid, 跳过")
-        return {"entry": entry, "ok": False, "reason": "no uid", "earned": 0, "success": 0}
+        return {
+            "entry": entry,
+            "ok": False,
+            "reason": "no uid",
+            "earned": 0,
+            "success": 0,
+        }
     UID = acc_uid
     print(f"  本账号 uid: {acc_uid}")
 
@@ -551,54 +761,77 @@ def run_account(entry, allow_env=True):
     if dc and dc.get("success"):
         print(f"  今日已领取次数: {dc.get('data', {}).get('total', '?')}")
     else:
-        print(f"  查询失败: {json.dumps(dc, ensure_ascii=False)[:150] if dc else 'None'}")
+        print(
+            f"  查询失败: {json.dumps(dc, ensure_ascii=False)[:150] if dc else 'None'}"
+        )
     ui = get_user_info()
     if ui and ui.get("success"):
         u = ui.get("data", {}).get("data", [])
         if u:
             u = u[0]
-            print(f"  昵称: {u.get('nickname')} | 积分: {u.get('score')} | 余额: {u.get('money')}")
+            print(
+                f"  昵称: {u.get('nickname')} | 积分: {u.get('score')} | "
+                f"余额: {u.get('money')}"
+            )
 
     # 4) 自动赚取
     print(f"\n[4/4] 开始自动赚取 (最多 {MAX_RUNS} 次) ...")
     total_earned, success_count, consecutive_fail = 0, 0, 0
     for i in range(MAX_RUNS):
-        print(f"\n  [{i+1}/{MAX_RUNS}] createContribution ...")
+        print(f"\n  [{i + 1}/{MAX_RUNS}] createContribution ...")
         res = create_contribution()
         if not res:
             consecutive_fail += 1
             print("  网络异常")
             if consecutive_fail >= 3:
-                print("  连续3次失败, 终止"); break
-            time.sleep(random.randint(10, 20)); continue
+                print("  连续3次失败, 终止")
+                break
+            time.sleep(random.randint(10, 20))
+            continue
         if not res.get("success"):
             consecutive_fail += 1
             print(f"  API失败: {json.dumps(res, ensure_ascii=False)[:150]}")
             if consecutive_fail >= 3:
-                print("  连续3次失败, 终止"); break
-            time.sleep(random.randint(10, 20)); continue
+                print("  连续3次失败, 终止")
+                break
+            time.sleep(random.randint(10, 20))
+            continue
         d = res.get("data", {})
         if d.get("errCode") == 0:
             inner = d.get("data", {})
             total_earned += inner.get("cons", 0)
             success_count += 1
             consecutive_fail = 0
-            print(f"  发放成功! 贡献值: {inner.get('cons')}, 今日总次数: {inner.get('count')}")
+            print(
+                f"  发放成功! 贡献值: {inner.get('cons')}, "
+                f"今日总次数: {inner.get('count')}"
+            )
         else:
             msg = d.get("errMsg", "未知")
             print(f"  失败 (errCode={d.get('errCode')}): {msg}")
-            if any(kw in msg for kw in ["上限", "超过", "限制", "已达", "满了", "次数"]):
-                print("  已达上限, 终止"); break
+            if any(
+                kw in msg for kw in ["上限", "超过", "限制", "已达", "满了", "次数"]
+            ):
+                print("  已达上限, 终止")
+                break
             consecutive_fail += 1
             if consecutive_fail >= 3:
-                print("  连续3次业务失败, 终止"); break
+                print("  连续3次业务失败, 终止")
+                break
         if i < MAX_RUNS - 1:
             delay = random.randint(30, 60)
             print(f"  等待 {delay}s ...")
             time.sleep(delay)
 
     print(f"\n  本账号完成: 成功 {success_count} 次, 贡献值 {total_earned}")
-    return {"entry": entry, "ok": True, "src": src, "earned": total_earned, "success": success_count, "uid": acc_uid}
+    return {
+        "entry": entry,
+        "ok": True,
+        "src": src,
+        "earned": total_earned,
+        "success": success_count,
+        "uid": acc_uid,
+    }
 
 
 def main():
@@ -625,9 +858,12 @@ def main():
     # 多账号模式必须禁用 env token 共享: 否则第2/3...个账号会复用 WOLF_UNI_ID_TOKEN
     # (第一个账号的身份), 导致所有账号都在操作同一个 uid。多账号下每个账号只用自己
     # 通过 YYB_GO 取码续期得到的隔离缓存 token。
-    allow_env = (len(entries) == 1)
+    allow_env = len(entries) == 1
     if not allow_env and UNI_ID_TOKEN.strip():
-        print("  [多账号] 已禁用 WOLF_UNI_ID_TOKEN 共享, 每个账号将各自通过 YYB_GO 取码续期\n")
+        print(
+            "  [多账号] 已禁用 WOLF_UNI_ID_TOKEN 共享, "
+            "每个账号将各自通过 YYB_GO 取码续期\n"
+        )
 
     results = []
     for idx, entry in enumerate(entries, 1):
@@ -642,7 +878,10 @@ def main():
     tot_success = sum(r.get("success", 0) for r in results)
     for r in results:
         if r.get("ok"):
-            print(f"  [OK] {r['entry']}  uid={r.get('uid')}  成功 {r['success']} 次, 贡献值 {r['earned']}")
+            print(
+                f"  [OK] {r['entry']}  uid={r.get('uid')}  "
+                f"成功 {r['success']} 次, 贡献值 {r['earned']}"
+            )
         else:
             print(f"  [跳过] {r['entry']}  ({r.get('reason')})")
     print(f"\n  总计: 成功 {tot_success} 次, 贡献值 {tot_earned} (1积分=1元)")
@@ -651,7 +890,10 @@ def main():
     uids = [r.get("uid") for r in results if r.get("uid")]
     if len(entries) > 1 and len(uids) != len(set(uids)):
         dup = [u for u in set(uids) if uids.count(u) > 1]
-        print(f"\n  ⚠️ 检测到重复 uid {dup}: 仍有账号在共用同一身份 token, 请检查对应微信是否已在 YYB_GO 登录授权!")
+        print(
+            f"\n  ⚠️ 检测到重复 uid {dup}: 仍有账号在共用同一身份 token, "
+            "请检查对应微信是否已在 YYB_GO 登录授权!"
+        )
 
     # 单账号模式下, 若续期成功则写回青龙环境变量 (多账号不写回, 避免覆盖)
     if len(results) == 1 and results[0].get("src") == "renewed":

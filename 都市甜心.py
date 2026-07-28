@@ -1,69 +1,155 @@
 # === YYB_GO 统一通知注入 begin ===
-import os as __os, sys as __sys, io as __io, atexit as __atexit, re as __re
+import atexit as _yyb_atexit
+import importlib as _yyb_importlib
+import json as _yyb_json
+import os as _yyb_os
+import re as _yyb_re
+import sys as _yyb_sys
+import urllib.request as _yyb_url_request
+
+_YYB_KEY_NAMES = ("QYWX_KEY", "QYWX", "WEWORK_KEY")
+_YYB_LOG_LIMIT = 40
 _yyb_logs = []
-class __LogHook(__io.TextIOBase):
-    def __init__(self, s): self._s = s
-    def write(self, s):
-        if s and s != '\n': _yyb_logs.append(s.rstrip('\n'))
-        self._s.write(s); return len(s)
-    def flush(self): self._s.flush()
-if not isinstance(__sys.stdout, __LogHook): __sys.stdout = __LogHook(__sys.stdout)
-if not isinstance(__sys.stderr, __LogHook): __sys.stderr = __LogHook(__sys.stderr)
+_yyb_notification_sent = False
 
-__pushed = False
-def __push():
-    global __pushed
-    if __pushed: return
-    try:
-        body = '\n'.join(_yyb_logs[-40:])
-        title = __os.path.basename(__sys.argv[0]) if __sys.argv else 'YYB_GO'
-        sn = None
-        try:
-            from sendNotify import sendNotify as _sn
-            sn = _sn
-        except Exception:
-            sn = None
-        if sn and callable(sn):
-            try: sn(title, body); return
-            except Exception: pass
-        key = __resolve_key()
+
+class _YybLogStream:
+    """Mirror a stream and collect complete lines for the final notification."""
+
+    _yyb_output_capture = True
+
+    def __init__(self, stream, prefix=""):
+        self._stream = stream
+        self._prefix = prefix
+        self._buffer = ""
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+    def _capture(self, text):
+        text = text.rstrip("\r")
+        if text:
+            _yyb_logs.append(f"{self._prefix}{text}")
+
+    def capture_pending(self):
+        if self._buffer:
+            self._capture(self._buffer)
+            self._buffer = ""
+
+    def flush(self):
+        self.capture_pending()
+        self._stream.flush()
+
+    def write(self, text):
+        written = self._stream.write(text)
+        self._buffer += text
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            self._capture(line)
+        return written
+
+    def writelines(self, lines):
+        for line in lines:
+            self.write(line)
+
+
+def _yyb_install_output_capture():
+    if not getattr(_yyb_sys.stdout, "_yyb_output_capture", False):
+        _yyb_sys.stdout = _YybLogStream(_yyb_sys.stdout)
+    if not getattr(_yyb_sys.stderr, "_yyb_output_capture", False):
+        _yyb_sys.stderr = _YybLogStream(_yyb_sys.stderr, "[stderr] ")
+
+
+def _yyb_flush_captured_output():
+    for stream in (_yyb_sys.stdout, _yyb_sys.stderr):
+        capture_pending = getattr(stream, "capture_pending", None)
+        if callable(capture_pending):
+            capture_pending()
+
+
+def _yyb_resolve_key():
+    for name in _YYB_KEY_NAMES:
+        key = _yyb_os.environ.get(name)
         if key:
-            import json as __json, urllib.request as __ur
-            data = __json.dumps({'msgtype':'text','text':{'content':f'【{title}】\n{body}'}}).encode('utf-8')
-            req = __ur.Request(f'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}', data=data, headers={'Content-Type':'application/json'})
-            __ur.urlopen(req, timeout=15)
-    except Exception:
-        pass
-    __pushed = True
+            return key
 
-def __resolve_key():
-    k = __os.environ.get('QYWX_KEY') or __os.environ.get('QYWX') or __os.environ.get('WEWORK_KEY')
-    if k: return k
-    for cand in ('sendNotify.js', '/ql/data/scripts/sendNotify.js'):
+    for candidate in ("sendNotify.js", "/ql/data/scripts/sendNotify.js"):
         try:
-            t = open(cand, encoding='utf-8').read()
-            m = __re.search(r"QYWX_KEY\s*=\s*'([^']+)'", t)
-            if not m:
-                m = __re.search(r'QYWX_KEY\s*=\s*"([^"]+)"', t)
-            if m: return m.group(1)
-        except Exception:
-            pass
+            with open(candidate, encoding="utf-8") as notify_file:
+                source = notify_file.read()
+            match = _yyb_re.search(r"QYWX_KEY\s*=\s*['\"]([^'\"]+)['\"]", source)
+            if match:
+                return match.group(1)
+        except (OSError, UnicodeError):
+            continue
     return None
 
-# 自然退出 / sys.exit 走 atexit；os._exit 绕过 atexit，单独拦截
-__orig_os_exit = __os._exit
-def __patched_os_exit(code=0):
-    global __pushed
-    if __pushed:
-        return __orig_os_exit(code)
-    __pushed = True
-    try: __push()
-    except Exception: pass
-    return __orig_os_exit(code)
-try: __os._exit = __patched_os_exit
-except Exception: pass
 
-__atexit.register(__push)
+def _yyb_build_notification():
+    _yyb_flush_captured_output()
+    title = _yyb_os.path.basename(_yyb_sys.argv[0]) if _yyb_sys.argv else "YYB_GO"
+    body = "\n".join(_yyb_logs[-_YYB_LOG_LIMIT:])
+    return title, body or "任务执行完成，无日志输出。"
+
+
+def _yyb_push_notification():
+    global _yyb_notification_sent
+
+    if _yyb_notification_sent:
+        return
+    _yyb_notification_sent = True
+
+    try:
+        title, body = _yyb_build_notification()
+        try:
+            notify_module = _yyb_importlib.import_module("sendNotify")
+            send_notify = getattr(notify_module, "sendNotify", None)
+        except ImportError:
+            send_notify = None
+
+        if callable(send_notify):
+            try:
+                send_notify(title, body)
+                return
+            except Exception:
+                pass
+
+        key = _yyb_resolve_key()
+        if not key:
+            return
+
+        payload = _yyb_json.dumps(
+            {
+                "msgtype": "text",
+                "text": {"content": f"【{title}】\n{body}"},
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+        request = _yyb_url_request.Request(
+            f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        with _yyb_url_request.urlopen(request, timeout=15):
+            pass
+    except Exception:
+        pass
+
+
+_yyb_original_os_exit = _yyb_os._exit
+
+
+def _yyb_patched_os_exit(code=0):
+    _yyb_push_notification()
+    _yyb_original_os_exit(code)
+
+
+_yyb_install_output_capture()
+try:
+    _yyb_os._exit = _yyb_patched_os_exit
+except (AttributeError, TypeError):
+    pass
+_yyb_atexit.register(_yyb_push_notification)
 # === YYB_GO 统一通知注入 end ===
 
 # name: 都市甜心
@@ -103,13 +189,12 @@ from urllib.parse import quote
 
 import requests
 
-
 APPID = "wx46abbbcfa7cf571a"
 # ========== 修改：从环境变量 YYB_GO 读取服务地址，换行分割 ==========
 SERVERS = []
-env_YYB_GO = os.getenv("YYB_GO", "")
-if env_YYB_GO:
-    raw_lines = env_YYB_GO.splitlines()
+env_yyb_go = os.getenv("YYB_GO", "")
+if env_yyb_go:
+    raw_lines = env_yyb_go.splitlines()
     # 去除每行首尾空格、过滤空行
     SERVERS = [line.strip() for line in raw_lines if line.strip()]
 
@@ -142,7 +227,13 @@ ENABLE_DIRECT_FALLBACK = True
 BASE_URL = "https://wxservice-stg62.pospal.cn"
 WEB_REPORT_URL = "https://webreport.pospal.cn/datareport/simple/web_report"
 
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Windows WindowsWechat/WMPF WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf2541923) XWEB/19823"
+UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 "
+    "MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI "
+    "MiniProgramEnv/Windows WindowsWechat/WMPF WindowsWechat(0x63090a13) "
+    "UnifiedPCWindowsWechat(0xf2541923) XWEB/19823"
+)
 
 
 def sleep(seconds: float) -> None:
@@ -239,8 +330,12 @@ def parse_proxy_response(text) -> dict | None:
                 return {
                     "host": str(host),
                     "port": int(port),
-                    "username": proxy_obj.get("user") or proxy_obj.get("username") or "",
-                    "password": proxy_obj.get("pass") or proxy_obj.get("password") or "",
+                    "username": proxy_obj.get("user")
+                    or proxy_obj.get("username")
+                    or "",
+                    "password": proxy_obj.get("pass")
+                    or proxy_obj.get("password")
+                    or "",
                 }
     except Exception:
         pass
@@ -335,7 +430,9 @@ def get_valid_proxy(account_name: str) -> tuple[dict | None, str]:
     return None, ""
 
 
-def request_with_proxy(method: str, url: str, *, proxies: dict | None = None, server: str = "", **kwargs):
+def request_with_proxy(
+    method: str, url: str, *, proxies: dict | None = None, server: str = "", **kwargs
+):
     kwargs.setdefault("timeout", 30)
 
     if proxies:
@@ -398,6 +495,7 @@ def parse_yyb_go_entry(raw_value):
 
     return server, ref
 
+
 def get_code(server: str) -> str | None:
     parsed_server, ref = parse_yyb_go_entry(server)
     if not parsed_server or not ref:
@@ -414,7 +512,7 @@ def get_code(server: str) -> str | None:
             proxies={"http": None, "https": None},
         )
         data = res.json()
-        code = (((data.get("data") or {}).get("result") or {}).get("code"))
+        code = ((data.get("data") or {}).get("result") or {}).get("code")
 
         if data.get("code") != 0 or not code:
             print(f"[{parsed_server}] 获取code失败：{data}")
@@ -425,6 +523,7 @@ def get_code(server: str) -> str | None:
     except Exception as exc:
         print(f"[{parsed_server}] 获取code异常：{exc}")
         return None
+
 
 def build_headers(
     store_id: str,
@@ -477,7 +576,14 @@ def find_values_by_key(data, keys: set[str]) -> list:
 def extract_customer_uid(data) -> str | None:
     values = find_values_by_key(
         data,
-        {"customerUid", "customer_uid", "customerUID", "customerId", "customer_id", "uid"},
+        {
+            "customerUid",
+            "customer_uid",
+            "customerUID",
+            "customerId",
+            "customer_id",
+            "uid",
+        },
     )
     for value in values:
         return str(value)
@@ -503,13 +609,17 @@ def extract_member_info(data: dict) -> dict:
     }
 
 
-def auth_without_visitor(server: str, store_id: str, proxies: dict | None) -> tuple[str | None, dict | None]:
+def auth_without_visitor(
+    server: str, store_id: str, proxies: dict | None
+) -> tuple[str | None, dict | None]:
     code = get_code(server)
     if not code:
         return None, {"error": "获取 code 失败"}
 
     url = f"{BASE_URL}/wxapi/customeraccount/Auth"
-    headers = build_headers(store_id, None, mode="RegularOrder|takeout", include_visitor=False)
+    headers = build_headers(
+        store_id, None, mode="RegularOrder|takeout", include_visitor=False
+    )
     body = {
         "storeId": int(store_id),
         "signInMode": 1,
@@ -604,7 +714,8 @@ def find_login_info(
     if customer_uid:
         log_success(
             "会员",
-            f"识别成功 昵称={member_info['nickname']} | 积分={member_info['point']} | UID={mask_value(customer_uid)}",
+            f"识别成功 昵称={member_info['nickname']} | "
+            f"积分={member_info['point']} | UID={mask_value(customer_uid)}",
         )
     else:
         log_warn("会员", f"未识别会员：{json_preview(data)}")
@@ -612,7 +723,9 @@ def find_login_info(
     return customer_uid, data, member_info
 
 
-def login_by_code(server: str, proxies: dict | None) -> tuple[str | None, str | None, str | None, dict | None, dict]:
+def login_by_code(
+    server: str, proxies: dict | None
+) -> tuple[str | None, str | None, str | None, dict | None, dict]:
     last_data = None
 
     for store_id in STORE_IDS:
@@ -624,7 +737,9 @@ def login_by_code(server: str, proxies: dict | None) -> tuple[str | None, str | 
         if not relogin_token:
             continue
 
-        customer_uid, login_info, member_info = find_login_info(server, store_id, relogin_token, proxies)
+        customer_uid, login_info, member_info = find_login_info(
+            server, store_id, relogin_token, proxies
+        )
         last_data = login_info
 
         if customer_uid:
@@ -661,7 +776,9 @@ def query_checkin_points(
             log_step(
                 "🎯",
                 "签到",
-                f"记录{index} customerUid={point.get('customerUid')} | 积分={point.get('gaintPoint', 0)} | 今日={'已签' if point.get('todayChecked') else '未签'}",
+                f"记录{index} customerUid={point.get('customerUid')} | "
+                f"积分={point.get('gaintPoint', 0)} | "
+                f"今日={'已签' if point.get('todayChecked') else '未签'}",
             )
 
         return True, data, today_checked
@@ -793,7 +910,9 @@ def run_account(index: int, total: int, server: str) -> dict:
     log_step("⏳", "延迟", f"启动延迟 {delay}s")
     sleep(delay)
 
-    store_id, customer_uid, visitor_uid, raw, member_info = login_by_code(server, proxies)
+    store_id, customer_uid, visitor_uid, raw, member_info = login_by_code(
+        server, proxies
+    )
 
     if not store_id or not customer_uid or not visitor_uid:
         result["error"] = f"登录识别失败，最后响应：{json_preview(raw, 800)}"
@@ -808,9 +927,16 @@ def run_account(index: int, total: int, server: str) -> dict:
     result["point"] = member_info.get("point", "-")
     result["category"] = member_info.get("category", "-")
 
-    log_step("🪪", "会员", f"昵称={result['nickname']} | 等级={result['category']} | 积分={result['point']}")
+    log_step(
+        "🪪",
+        "会员",
+        f"昵称={result['nickname']} | 等级={result['category']} | "
+        f"积分={result['point']}",
+    )
 
-    _, _, today_checked_before = query_checkin_points(server, store_id, visitor_uid, proxies)
+    _, _, today_checked_before = query_checkin_points(
+        server, store_id, visitor_uid, proxies
+    )
     result["before_status"] = "已签到" if today_checked_before else "未签到"
 
     if today_checked_before:
@@ -826,12 +952,16 @@ def run_account(index: int, total: int, server: str) -> dict:
 
     sleep(2)
 
-    web_ok, web_msg = web_report_sign_in(server, store_id, customer_uid, visitor_uid, proxies)
+    web_ok, web_msg = web_report_sign_in(
+        server, store_id, customer_uid, visitor_uid, proxies
+    )
     result["web_report"] = web_msg
 
     sleep(5)
 
-    _, _, today_checked_after = query_checkin_points(server, store_id, visitor_uid, proxies)
+    _, _, today_checked_after = query_checkin_points(
+        server, store_id, visitor_uid, proxies
+    )
     result["after_status"] = "已签到" if today_checked_after else "未签到"
 
     result["success"] = bool(today_checked_after or real_ok or web_ok)
@@ -895,24 +1025,26 @@ def main() -> None:
             results.append(result)
         except Exception as exc:
             log_error("主程序", f"{server} 执行异常：{exc}")
-            results.append({
-                "server": server,
-                "success": False,
-                "proxy_status": "-",
-                "proxy_ip": "-",
-                "store_id": "-",
-                "visitor_uid": "-",
-                "customer_uid": "-",
-                "nickname": "-",
-                "phone": "-",
-                "point": "-",
-                "category": "-",
-                "before_status": "-",
-                "real_sign": "-",
-                "web_report": "-",
-                "after_status": "-",
-                "error": str(exc),
-            })
+            results.append(
+                {
+                    "server": server,
+                    "success": False,
+                    "proxy_status": "-",
+                    "proxy_ip": "-",
+                    "store_id": "-",
+                    "visitor_uid": "-",
+                    "customer_uid": "-",
+                    "nickname": "-",
+                    "phone": "-",
+                    "point": "-",
+                    "category": "-",
+                    "before_status": "-",
+                    "real_sign": "-",
+                    "web_report": "-",
+                    "after_status": "-",
+                    "error": str(exc),
+                }
+            )
 
         if index < len(SERVERS):
             log_step("⏳", "间隔", "等待 2s 后处理下一个账号")

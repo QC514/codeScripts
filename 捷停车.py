@@ -1,69 +1,155 @@
 # === YYB_GO 统一通知注入 begin ===
-import os as __os, sys as __sys, io as __io, atexit as __atexit, re as __re
+import atexit as _yyb_atexit
+import importlib as _yyb_importlib
+import json as _yyb_json
+import os as _yyb_os
+import re as _yyb_re
+import sys as _yyb_sys
+import urllib.request as _yyb_url_request
+
+_YYB_KEY_NAMES = ("QYWX_KEY", "QYWX", "WEWORK_KEY")
+_YYB_LOG_LIMIT = 40
 _yyb_logs = []
-class __LogHook(__io.TextIOBase):
-    def __init__(self, s): self._s = s
-    def write(self, s):
-        if s and s != '\n': _yyb_logs.append(s.rstrip('\n'))
-        self._s.write(s); return len(s)
-    def flush(self): self._s.flush()
-if not isinstance(__sys.stdout, __LogHook): __sys.stdout = __LogHook(__sys.stdout)
-if not isinstance(__sys.stderr, __LogHook): __sys.stderr = __LogHook(__sys.stderr)
+_yyb_notification_sent = False
 
-__pushed = False
-def __push():
-    global __pushed
-    if __pushed: return
-    try:
-        body = '\n'.join(_yyb_logs[-40:])
-        title = __os.path.basename(__sys.argv[0]) if __sys.argv else 'YYB_GO'
-        sn = None
-        try:
-            from sendNotify import sendNotify as _sn
-            sn = _sn
-        except Exception:
-            sn = None
-        if sn and callable(sn):
-            try: sn(title, body); return
-            except Exception: pass
-        key = __resolve_key()
+
+class _YybLogStream:
+    """Mirror a stream and collect complete lines for the final notification."""
+
+    _yyb_output_capture = True
+
+    def __init__(self, stream, prefix=""):
+        self._stream = stream
+        self._prefix = prefix
+        self._buffer = ""
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+    def _capture(self, text):
+        text = text.rstrip("\r")
+        if text:
+            _yyb_logs.append(f"{self._prefix}{text}")
+
+    def capture_pending(self):
+        if self._buffer:
+            self._capture(self._buffer)
+            self._buffer = ""
+
+    def flush(self):
+        self.capture_pending()
+        self._stream.flush()
+
+    def write(self, text):
+        written = self._stream.write(text)
+        self._buffer += text
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            self._capture(line)
+        return written
+
+    def writelines(self, lines):
+        for line in lines:
+            self.write(line)
+
+
+def _yyb_install_output_capture():
+    if not getattr(_yyb_sys.stdout, "_yyb_output_capture", False):
+        _yyb_sys.stdout = _YybLogStream(_yyb_sys.stdout)
+    if not getattr(_yyb_sys.stderr, "_yyb_output_capture", False):
+        _yyb_sys.stderr = _YybLogStream(_yyb_sys.stderr, "[stderr] ")
+
+
+def _yyb_flush_captured_output():
+    for stream in (_yyb_sys.stdout, _yyb_sys.stderr):
+        capture_pending = getattr(stream, "capture_pending", None)
+        if callable(capture_pending):
+            capture_pending()
+
+
+def _yyb_resolve_key():
+    for name in _YYB_KEY_NAMES:
+        key = _yyb_os.environ.get(name)
         if key:
-            import json as __json, urllib.request as __ur
-            data = __json.dumps({'msgtype':'text','text':{'content':f'【{title}】\n{body}'}}).encode('utf-8')
-            req = __ur.Request(f'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}', data=data, headers={'Content-Type':'application/json'})
-            __ur.urlopen(req, timeout=15)
-    except Exception:
-        pass
-    __pushed = True
+            return key
 
-def __resolve_key():
-    k = __os.environ.get('QYWX_KEY') or __os.environ.get('QYWX') or __os.environ.get('WEWORK_KEY')
-    if k: return k
-    for cand in ('sendNotify.js', '/ql/data/scripts/sendNotify.js'):
+    for candidate in ("sendNotify.js", "/ql/data/scripts/sendNotify.js"):
         try:
-            t = open(cand, encoding='utf-8').read()
-            m = __re.search(r"QYWX_KEY\s*=\s*'([^']+)'", t)
-            if not m:
-                m = __re.search(r'QYWX_KEY\s*=\s*"([^"]+)"', t)
-            if m: return m.group(1)
-        except Exception:
-            pass
+            with open(candidate, encoding="utf-8") as notify_file:
+                source = notify_file.read()
+            match = _yyb_re.search(r"QYWX_KEY\s*=\s*['\"]([^'\"]+)['\"]", source)
+            if match:
+                return match.group(1)
+        except (OSError, UnicodeError):
+            continue
     return None
 
-# 自然退出 / sys.exit 走 atexit；os._exit 绕过 atexit，单独拦截
-__orig_os_exit = __os._exit
-def __patched_os_exit(code=0):
-    global __pushed
-    if __pushed:
-        return __orig_os_exit(code)
-    __pushed = True
-    try: __push()
-    except Exception: pass
-    return __orig_os_exit(code)
-try: __os._exit = __patched_os_exit
-except Exception: pass
 
-__atexit.register(__push)
+def _yyb_build_notification():
+    _yyb_flush_captured_output()
+    title = _yyb_os.path.basename(_yyb_sys.argv[0]) if _yyb_sys.argv else "YYB_GO"
+    body = "\n".join(_yyb_logs[-_YYB_LOG_LIMIT:])
+    return title, body or "任务执行完成，无日志输出。"
+
+
+def _yyb_push_notification():
+    global _yyb_notification_sent
+
+    if _yyb_notification_sent:
+        return
+    _yyb_notification_sent = True
+
+    try:
+        title, body = _yyb_build_notification()
+        try:
+            notify_module = _yyb_importlib.import_module("sendNotify")
+            send_notify = getattr(notify_module, "sendNotify", None)
+        except ImportError:
+            send_notify = None
+
+        if callable(send_notify):
+            try:
+                send_notify(title, body)
+                return
+            except Exception:
+                pass
+
+        key = _yyb_resolve_key()
+        if not key:
+            return
+
+        payload = _yyb_json.dumps(
+            {
+                "msgtype": "text",
+                "text": {"content": f"【{title}】\n{body}"},
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+        request = _yyb_url_request.Request(
+            f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        with _yyb_url_request.urlopen(request, timeout=15):
+            pass
+    except Exception:
+        pass
+
+
+_yyb_original_os_exit = _yyb_os._exit
+
+
+def _yyb_patched_os_exit(code=0):
+    _yyb_push_notification()
+    _yyb_original_os_exit(code)
+
+
+_yyb_install_output_capture()
+try:
+    _yyb_os._exit = _yyb_patched_os_exit
+except (AttributeError, TypeError):
+    pass
+_yyb_atexit.register(_yyb_push_notification)
 # === YYB_GO 统一通知注入 end ===
 
 # name: 捷停车
@@ -82,28 +168,38 @@ __atexit.register(__push)
 # PLUSPLUS_TOKEN 可选：推送token
 #
 
-import os
-import sys
 import asyncio
-import json
-import random
+import binascii
 import hashlib
+import json
+import os
+import random
+import sys
 import time
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
+
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
-import binascii
-from typing import List, Dict, Any, Optional, Tuple
 
 # 强制全局禁用所有系统代理环境变量
-for env_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy',
-                'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy']:
+for env_var in [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+    "NO_PROXY",
+    "no_proxy",
+]:
     os.environ.pop(env_var, None)
 
 # ===================== JWT库自动检测与修复 =====================
 try:
     import jwt
-    if not hasattr(jwt, 'decode'):
+
+    if not hasattr(jwt, "decode"):
         raise ImportError("安装的是错误的jwt库，不是pyjwt")
 except ImportError as e:
     print("❌ JWT库错误！请在青龙依赖管理执行以下命令：")
@@ -123,9 +219,9 @@ except ImportError:
 # ===================== 配置项 =====================
 # 从环境变量 YYB_GO 读取wxcode服务地址，多行换行分隔
 SERVERS = []
-env_YYB_GO = os.getenv("YYB_GO", "")
-if env_YYB_GO:
-    raw_lines = env_YYB_GO.splitlines()
+env_yyb_go = os.getenv("YYB_GO", "")
+if env_yyb_go:
+    raw_lines = env_yyb_go.splitlines()
     SERVERS = [line.strip() for line in raw_lines if line.strip()]
 
 # 无有效地址直接退出
@@ -166,32 +262,62 @@ TASK_QUERY_URL = "/base-gateway/integral/v2/task/query-new"
 
 # UA池
 USER_AGENT_LIST = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Windows WindowsWechat/WMPF WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf2541923) XWEB/19823",
-    f"Mozilla/5.0 (Linux; Android 14; 2512BPNDAC Build/UKQ1.230917.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/146.0.7680.153 Mobile Safari/537.36 XWEB/{XWEB_VERSION} MMWEBSDK/20251006 MiniProgramEnv/android"
+    (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 "
+        "MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI "
+        "MiniProgramEnv/Windows WindowsWechat/WMPF WindowsWechat(0x63090a13) "
+        "UnifiedPCWindowsWechat(0xf2541923) XWEB/19823"
+    ),
+    (
+        "Mozilla/5.0 (Linux; Android 14; 2512BPNDAC Build/UKQ1.230917.001; wv) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 "
+        "Chrome/146.0.7680.153 Mobile Safari/537.36 "
+        f"XWEB/{XWEB_VERSION} MMWEBSDK/20251006 MiniProgramEnv/android"
+    ),
 ]
 
 # 只保留指定的3个任务，其他全部跳过
-SKIP_TASKS = {"T02", "T03", "T04", "T05", "T06", "T07", "T08", "T09", "T10",
-              "T11", "T12", "T46", "T48", "T49", "T50", "T81", "T87"}
+SKIP_TASKS = {
+    "T02",
+    "T03",
+    "T04",
+    "T05",
+    "T06",
+    "T07",
+    "T08",
+    "T09",
+    "T10",
+    "T11",
+    "T12",
+    "T46",
+    "T48",
+    "T49",
+    "T50",
+    "T81",
+    "T87",
+}
 
 # 强制执行的核心任务（已更新为最新编号）
-FORCE_EXECUTE_TASKS = [
-    ("T01", "浏览找优惠"),
-    ("T47", "浏览车位优选")
-]
+FORCE_EXECUTE_TASKS = [("T01", "浏览找优惠"), ("T47", "浏览车位优选")]
+
 
 # ===================== 工具函数 =====================
 def sleep(ms: int) -> asyncio.Future:
     return asyncio.sleep(ms / 1000)
 
+
 def random_int(min_val: int, max_val: int) -> int:
     return random.randint(min_val, max_val)
+
 
 def get_ua() -> str:
     return random.choice(USER_AGENT_LIST)
 
+
 def build_direct_transport() -> AsyncHTTPTransport:
     return AsyncHTTPTransport(verify=False)
+
 
 def parse_yyb_go_entry(raw_value: str) -> Tuple[str, str]:
     value = str(raw_value or "").strip()
@@ -201,7 +327,7 @@ def parse_yyb_go_entry(raw_value: str) -> Tuple[str, str]:
     if at_index == -1:
         return value, ""
     server = value[:at_index].strip()
-    ref = value[at_index + 1:].strip()
+    ref = value[at_index + 1 :].strip()
     server = server.removeprefix("http://").removeprefix("https://").rstrip("/")
     return server, ref
 
@@ -217,11 +343,13 @@ async def get_code_via_yyb(server_entry: str, appid: str) -> Optional[str]:
 
     url = f"http://{server}/wxapp/getCode"
     try:
-        async with httpx.AsyncClient(timeout=20.0, verify=False, trust_env=False) as client:
+        async with httpx.AsyncClient(
+            timeout=20.0, verify=False, trust_env=False
+        ) as client:
             response = await client.post(url, json={"ref": ref, "app_id": appid})
             res = response.json()
 
-        code = (((res.get("data") or {}).get("result") or {}).get("code"))
+        code = ((res.get("data") or {}).get("result") or {}).get("code")
         if res.get("code") != 0 or not code:
             print(f"❌ [{server_entry}] 获取code失败 | 返回异常: {str(res)[:200]}")
             return None
@@ -235,6 +363,7 @@ async def get_code_via_yyb(server_entry: str, appid: str) -> Optional[str]:
         print(f"❌ [{server_entry}] 获取code异常 | 原因: {str(e)}")
         return None
 
+
 # ===================== 品赞代理系统 =====================
 def parse_proxy_response(text: str) -> Optional[Dict[str, Any]]:
     text = text.strip()
@@ -244,11 +373,19 @@ def parse_proxy_response(text: str) -> Optional[Dict[str, Any]]:
     try:
         data = json.loads(text)
         proxy_obj = None
-        if data.get("data") and isinstance(data["data"], list) and len(data["data"]) > 0:
+        if (
+            data.get("data")
+            and isinstance(data["data"], list)
+            and len(data["data"]) > 0
+        ):
             proxy_obj = data["data"][0]
         elif data.get("ip") and data.get("port"):
             proxy_obj = data
-        elif data.get("result") and data.get("result").get("ip") and data.get("result").get("port"):
+        elif (
+            data.get("result")
+            and data.get("result").get("ip")
+            and data.get("result").get("port")
+        ):
             proxy_obj = data["result"]
 
         if proxy_obj:
@@ -256,7 +393,7 @@ def parse_proxy_response(text: str) -> Optional[Dict[str, Any]]:
                 "host": proxy_obj["ip"],
                 "port": int(proxy_obj["port"]),
                 "username": proxy_obj.get("user") or proxy_obj.get("username") or "",
-                "password": proxy_obj.get("pass") or proxy_obj.get("password") or ""
+                "password": proxy_obj.get("pass") or proxy_obj.get("password") or "",
             }
     except json.JSONDecodeError:
         if ":" in text:
@@ -266,9 +403,10 @@ def parse_proxy_response(text: str) -> Optional[Dict[str, Any]]:
                     "host": parts[0],
                     "port": int(parts[1]),
                     "username": parts[2] if len(parts) >= 3 else "",
-                    "password": parts[3] if len(parts) >= 4 else ""
+                    "password": parts[3] if len(parts) >= 4 else "",
                 }
     return None
+
 
 async def validate_proxy(proxy_info: Dict[str, Any]) -> bool:
     if not proxy_info:
@@ -276,7 +414,9 @@ async def validate_proxy(proxy_info: Dict[str, Any]) -> bool:
 
     try:
         transport = build_proxy_transport(proxy_info)
-        async with httpx.AsyncClient(transport=transport, timeout=15.0, verify=False) as client:
+        async with httpx.AsyncClient(
+            transport=transport, timeout=15.0, verify=False
+        ) as client:
             response = await client.get(PROXY_VALIDATE_URL)
             if response.status_code == 200:
                 ip = response.json().get("origin", "未知")
@@ -285,6 +425,7 @@ async def validate_proxy(proxy_info: Dict[str, Any]) -> bool:
     except Exception as e:
         print(f"⚠️ 代理验证失败 | 原因: {str(e)}")
     return False
+
 
 def build_proxy_transport(proxy_info: Dict[str, Any]) -> Optional[AsyncProxyTransport]:
     if not proxy_info:
@@ -297,14 +438,23 @@ def build_proxy_transport(proxy_info: Dict[str, Any]) -> Optional[AsyncProxyTran
 
     try:
         if PROXY_TYPE == "socks5":
-            proxy_url = f"socks5://{username}:{password}@{host}:{port}" if username and password else f"socks5://{host}:{port}"
+            proxy_url = (
+                f"socks5://{username}:{password}@{host}:{port}"
+                if username and password
+                else f"socks5://{host}:{port}"
+            )
         else:
-            proxy_url = f"http://{username}:{password}@{host}:{port}" if username and password else f"http://{host}:{port}"
+            proxy_url = (
+                f"http://{username}:{password}@{host}:{port}"
+                if username and password
+                else f"http://{host}:{port}"
+            )
 
         return AsyncProxyTransport.from_url(proxy_url, verify=False)
     except Exception as e:
         print(f"❌ 代理生成失败 | 原因: {str(e)}")
         return None
+
 
 async def get_valid_proxy(account_name: str) -> Optional[Dict[str, Any]]:
     if not PROXY_API:
@@ -315,27 +465,30 @@ async def get_valid_proxy(account_name: str) -> Optional[Dict[str, Any]]:
 
     for i in range(PROXY_RETRY_TIMES):
         try:
-            async with httpx.AsyncClient(timeout=15.0, transport=build_direct_transport()) as client:
+            async with httpx.AsyncClient(
+                timeout=15.0, transport=build_direct_transport()
+            ) as client:
                 response = await client.get(PROXY_API)
             proxy_info = parse_proxy_response(response.text)
 
             if not proxy_info:
-                print(f"⚠️ [{account_name}] 第{i+1}次获取代理失败 | 响应格式错误")
+                print(f"⚠️ [{account_name}] 第{i + 1}次获取代理失败 | 响应格式错误")
                 continue
 
             if await validate_proxy(proxy_info):
                 return proxy_info
             else:
-                print(f"⚠️ [{account_name}] 第{i+1}次代理不可用 | 重试中...")
+                print(f"⚠️ [{account_name}] 第{i + 1}次代理不可用 | 重试中...")
 
         except Exception as e:
-            print(f"⚠️ [{account_name}] 第{i+1}次获取代理异常 | 原因: {str(e)}")
+            print(f"⚠️ [{account_name}] 第{i + 1}次获取代理异常 | 原因: {str(e)}")
 
         if i < PROXY_RETRY_TIMES - 1:
             await sleep(2000)
 
     print(f"❌ [{account_name}] 代理获取失败 | 切换直连模式")
     return None
+
 
 # ===================== 智能代理管理器（新增） =====================
 class ProxyManager:
@@ -375,7 +528,10 @@ class ProxyManager:
 
         new_proxy = await self.get_proxy()
         if new_proxy:
-            print(f"✅ [{self.account_name}] 代理重建成功 | 新出口IP: {new_proxy['host']}:{new_proxy['port']}")
+            print(
+                f"✅ [{self.account_name}] 代理重建成功 | 新出口IP: "
+                f"{new_proxy['host']}:{new_proxy['port']}"
+            )
             return True
         else:
             print(f"⚠️ [{self.account_name}] 代理重建失败，切换为直连模式")
@@ -392,9 +548,10 @@ class ProxyManager:
             "connection refused",
             "timeout",
             "proxy",
-            "transport closed"
+            "transport closed",
         ]
         return any(keyword in error_str for keyword in proxy_error_keywords)
+
 
 # ===================== PushPlus推送函数 =====================
 async def send_plusplus_notification(title: str, content: str) -> None:
@@ -402,20 +559,23 @@ async def send_plusplus_notification(title: str, content: str) -> None:
         return
 
     try:
-        async with httpx.AsyncClient(timeout=5.0, transport=build_direct_transport()) as client:
+        async with httpx.AsyncClient(
+            timeout=5.0, transport=build_direct_transport()
+        ) as client:
             response = await client.post(
                 "https://www.pushplus.plus/send",
                 json={
                     "token": PLUSPLUS_TOKEN,
                     "title": title,
                     "content": content,
-                    "template": "txt"
-                }
+                    "template": "txt",
+                },
             )
         if response.status_code == 200:
             print("✅ 通知推送成功")
     except Exception as e:
         print(f"❌ 通知推送失败 | 原因: {str(e)}")
+
 
 # ===================== 数据上报生成器 =====================
 class DataReportGenerator:
@@ -435,9 +595,17 @@ class DataReportGenerator:
             if value is not None:
                 sorted_params.append(f"{key}={value}")
         sign_string = "&".join(sorted_params) + "&" + self.secret_key
-        return hashlib.md5(sign_string.encode('utf-8')).hexdigest().upper()
+        return hashlib.md5(sign_string.encode("utf-8")).hexdigest().upper()
 
-    def create_report_data(self, user_id, open_id, event_name="ShowGoToClaim", page_event_name="RentalPage", task_info=None, extra_props=None):
+    def create_report_data(
+        self,
+        user_id,
+        open_id,
+        event_name="ShowGoToClaim",
+        page_event_name="RentalPage",
+        task_info=None,
+        extra_props=None,
+    ):
         timestamp = int(datetime.now().timestamp() * 1000)
         nonce, _ = self.generate_nonce(timestamp)
 
@@ -446,20 +614,28 @@ class DataReportGenerator:
             event_property.update(extra_props)
 
         if event_name == "GoToFinishClick" and task_info:
-            event_property.update({
-                "TaskName": task_info.get("showTitle", ""),
-                "TaskNo": task_info.get("taskNo", ""),
-                "pageEventName": "PointsTaskPage",
-                "referrer": "pages/my/my",
-                "curPgUrl": "subPkg/tcb/index"
-            })
-        elif event_name in ("TaskStart", "TaskAction", "TaskProgress", "TaskFinish", "TaskReceive") and task_info:
-            event_property.update({
-                "TaskName": task_info.get("showTitle", ""),
-                "TaskNo": task_info.get("taskNo", ""),
-                "stage": event_name,
-                "pageEventName": "PointsTaskPage",
-            })
+            event_property.update(
+                {
+                    "TaskName": task_info.get("showTitle", ""),
+                    "TaskNo": task_info.get("taskNo", ""),
+                    "pageEventName": "PointsTaskPage",
+                    "referrer": "pages/my/my",
+                    "curPgUrl": "subPkg/tcb/index",
+                }
+            )
+        elif (
+            event_name
+            in ("TaskStart", "TaskAction", "TaskProgress", "TaskFinish", "TaskReceive")
+            and task_info
+        ):
+            event_property.update(
+                {
+                    "TaskName": task_info.get("showTitle", ""),
+                    "TaskNo": task_info.get("taskNo", ""),
+                    "stage": event_name,
+                    "pageEventName": "PointsTaskPage",
+                }
+            )
 
         data = {
             "opSystem": "windows",
@@ -487,11 +663,12 @@ class DataReportGenerator:
             "eventProperty": json.dumps(event_property, ensure_ascii=False),
             "signType": "MD5",
             "timestamp": timestamp,
-            "nonce": nonce
+            "nonce": nonce,
         }
 
         data["sign"] = self.generate_sign(data)
         return data
+
 
 # ===================== 核心业务类（代理自动重连版） =====================
 class JtcBot:
@@ -543,7 +720,7 @@ class JtcBot:
             transport=transport,
             http2=True,
             timeout=30.0,
-            verify=False
+            verify=False,
         )
 
         print(f"🔌 [{self.server}] 客户端已重建 | 当前模式: {mode}")
@@ -558,7 +735,7 @@ class JtcBot:
             "Accept": "*/*",
             "Referer": f"https://servicewechat.com/{APPID}/{APP_VERSION}/page-frame.html",
             "Accept-Encoding": "gzip, deflate, br",
-            "Accept-Language": "zh-CN,zh;q=0.9"
+            "Accept-Language": "zh-CN,zh;q=0.9",
         }
 
         if self.token:
@@ -618,17 +795,17 @@ class JtcBot:
             "Sec-Fetch-Dest": "empty",
             "Referer": f"https://servicewechat.com/{APPID}/{APP_VERSION}/page-frame.html",
             "Accept-Encoding": "gzip, deflate, br",
-            "Accept-Language": "zh-CN,zh;q=0.9"
+            "Accept-Language": "zh-CN,zh;q=0.9",
         }
 
-        payload = {
-            "code": code,
-            "userType": "WX_XCX_JTC",
-            "appId": APPID
-        }
+        payload = {"code": code, "userType": "WX_XCX_JTC", "appId": APPID}
 
         try:
-            transport = build_proxy_transport(self.proxy_manager.proxy_info) if self.proxy_manager.proxy_info else build_direct_transport()
+            transport = (
+                build_proxy_transport(self.proxy_manager.proxy_info)
+                if self.proxy_manager.proxy_info
+                else build_direct_transport()
+            )
             mode = "代理" if self.proxy_manager.proxy_info else "直连"
 
             print(f"🌐 [{self.server}] 使用{mode}发起token请求 | URL: {token_url}")
@@ -637,7 +814,7 @@ class JtcBot:
                 headers=headers,
                 timeout=20.0,
                 http2=True,
-                verify=False
+                verify=False,
             ) as client:
                 response = await client.post(token_url, json=payload)
 
@@ -648,12 +825,16 @@ class JtcBot:
 
             res = response.json()
             # 适配最新响应格式（resultCode=0表示成功，token在obj字段）
-            if res.get("resultCode") == "0" and res.get("obj") and res["obj"].get("token"):
+            if (
+                res.get("resultCode") == "0"
+                and res.get("obj")
+                and res["obj"].get("token")
+            ):
                 self.token = res["obj"]["token"]
                 print(f"✅ [{self.server}] 获取token成功 | 模式: {mode}")
                 return self.token
             # 兼容旧格式
-            elif (res.get("success") and res.get("data") and res["data"].get("token")):
+            elif res.get("success") and res.get("data") and res["data"].get("token"):
                 self.token = res["data"]["token"]
                 print(f"✅ [{self.server}] 获取token成功（旧格式）| 模式: {mode}")
                 return self.token
@@ -670,23 +851,35 @@ class JtcBot:
                         timeout=20.0,
                         http2=True,
                         transport=build_direct_transport(),
-                        verify=False
+                        verify=False,
                     ) as client:
                         response = await client.post(token_url, json=payload)
 
-                    print(f"📝 [{self.server}] 直连响应 | 状态码: {response.status_code}")
+                    print(
+                        f"📝 [{self.server}] 直连响应 | 状态码: {response.status_code}"
+                    )
 
                     res = response.json()
-                    if res.get("resultCode") == "0" and res.get("obj") and res["obj"].get("token"):
+                    if (
+                        res.get("resultCode") == "0"
+                        and res.get("obj")
+                        and res["obj"].get("token")
+                    ):
                         self.token = res["obj"]["token"]
                         print(f"✅ [{self.server}] 直连获取token成功")
                         return self.token
-                    elif (res.get("success") and res.get("data") and res["data"].get("token")):
+                    elif (
+                        res.get("success")
+                        and res.get("data")
+                        and res["data"].get("token")
+                    ):
                         self.token = res["data"]["token"]
                         print(f"✅ [{self.server}] 直连获取token成功（旧格式）")
                         return self.token
                     else:
-                        raise Exception(f"直连业务错误: {res.get('message', '未知错误')}")
+                        raise Exception(
+                            f"直连业务错误: {res.get('message', '未知错误')}"
+                        )
                 except Exception as e2:
                     print(f"❌ [{self.server}] 直连获取token失败 | 原因: {str(e2)}")
 
@@ -695,7 +888,9 @@ class JtcBot:
     def parse_jwt(self):
         """解析JWT获取用户信息（兼容新token格式）"""
         try:
-            decoded = jwt.decode(self.token, options={"verify_signature": False}, algorithms=["HS256"])
+            decoded = jwt.decode(
+                self.token, options={"verify_signature": False}, algorithms=["HS256"]
+            )
             sub_data = json.loads(decoded.get("sub", "{}"))
             self.user_id = sub_data.get("userId")
             self.open_id = sub_data.get("id")
@@ -708,7 +903,9 @@ class JtcBot:
     async def get_location_info(self):
         """获取经纬度坐标信息"""
         try:
-            async with httpx.AsyncClient(timeout=15.0, transport=build_direct_transport(), verify=False) as client:
+            async with httpx.AsyncClient(
+                timeout=15.0, transport=build_direct_transport(), verify=False
+            ) as client:
                 response = await client.get("https://ipinfo.io/json")
                 data = response.json()
 
@@ -721,7 +918,10 @@ class JtcBot:
                 self.longitude = base_lon + random.randint(0, 9999999999999) / 10**16
                 self.latitude = base_lat + random.randint(0, 999999999999999) / 10**18
 
-                print(f"✅ [{self.server}] 经纬度已补全 | 经度: {self.longitude:.6f} | 纬度: {self.latitude:.6f}")
+                print(
+                    f"✅ [{self.server}] 经纬度已补全 | "
+                    f"经度: {self.longitude:.6f} | 纬度: {self.latitude:.6f}"
+                )
                 return True
             else:
                 raise Exception("无法解析经纬度")
@@ -731,11 +931,18 @@ class JtcBot:
             self.latitude = 39.910925
             return True
 
-    async def send_data_report(self, event_name="ShowGoToClaim", task_info=None, extra_props=None):
+    async def send_data_report(
+        self, event_name="ShowGoToClaim", task_info=None, extra_props=None
+    ):
         """异步埋点数据上报（使用安全请求）"""
         try:
             report_data = self.report_generator.create_report_data(
-                self.user_id, self.open_id, event_name, "RentalPage", task_info, extra_props
+                self.user_id,
+                self.open_id,
+                event_name,
+                "RentalPage",
+                task_info,
+                extra_props,
             )
             report_data["longitude"] = self.longitude
             report_data["latitude"] = self.latitude
@@ -750,15 +957,17 @@ class JtcBot:
                 "Accept": "*/*",
                 "Referer": f"https://servicewechat.com/{APPID}/{APP_VERSION}/page-frame.html",
                 "Accept-Encoding": "gzip, deflate, br",
-                "Accept-Language": "zh-CN,zh;q=0.9"
+                "Accept-Language": "zh-CN,zh;q=0.9",
             }
 
-            transport = build_proxy_transport(self.proxy_manager.proxy_info) if self.proxy_manager.proxy_info else build_direct_transport()
+            transport = (
+                build_proxy_transport(self.proxy_manager.proxy_info)
+                if self.proxy_manager.proxy_info
+                else build_direct_transport()
+            )
 
             async with httpx.AsyncClient(
-                transport=transport,
-                timeout=15.0,
-                verify=False
+                transport=transport, timeout=15.0, verify=False
             ) as client:
                 await client.post(REPORT_URL, headers=headers, json=report_data)
             return True
@@ -785,10 +994,19 @@ class JtcBot:
         if isinstance(data, str):
             try:
                 return int(float(data))
-            except:
+            except (TypeError, ValueError):
                 return default
         if isinstance(data, dict):
-            for key in ("amount", "value", "points", "integral", "data", "reward", "cnt", "count"):
+            for key in (
+                "amount",
+                "value",
+                "points",
+                "integral",
+                "data",
+                "reward",
+                "cnt",
+                "count",
+            ):
                 if key in data:
                     return self.safe_get_reward(data.get(key), default)
         return default
@@ -804,7 +1022,7 @@ class JtcBot:
             response = await self._safe_request(
                 "POST",
                 "/core-gateway/user/query/attention/info",
-                json={"h5Source": "WX_XCX_JTC", "openId": self.open_id}
+                json={"h5Source": "WX_XCX_JTC", "openId": self.open_id},
             )
             response_data = response.json()
 
@@ -824,7 +1042,7 @@ class JtcBot:
             await self._safe_request(
                 "POST",
                 "/base-gateway/integral/v2/sign-in-task/query",
-                json={"userId": self.user_id, "platformType": "WX_XCX_JTC"}
+                json={"userId": self.user_id, "platformType": "WX_XCX_JTC"},
             )
             await sleep(1000)
 
@@ -832,7 +1050,12 @@ class JtcBot:
             await self._safe_request(
                 "POST",
                 "/base-gateway/integral/v2/show/header-pop/query",
-                json={"userId": self.user_id, "platformType": "WX_XCX_JTC", "osType": "ANDROID", "reqVersion": "V2.0"}
+                json={
+                    "userId": self.user_id,
+                    "platformType": "WX_XCX_JTC",
+                    "osType": "ANDROID",
+                    "reqVersion": "V2.0",
+                },
             )
             await sleep(1000)
 
@@ -846,8 +1069,8 @@ class JtcBot:
                     "reqSource": "WX_XCX_JTC",
                     "platformType": "WX_XCX_JTC",
                     "osType": "WINDOWS",
-                    "token": self.token
-                }
+                    "token": self.token,
+                },
             )
             response_data = response.json()
 
@@ -872,21 +1095,18 @@ class JtcBot:
             task_headers = {
                 **self._get_base_headers(),
                 "applicationVersion": "1.0.0",
-                "UC_ID": self.open_id
+                "UC_ID": self.open_id,
             }
 
             payload = {
                 "userId": self.user_id,
                 "platformType": "WX_XCX_JTC",
                 "osType": "WINDOWS",
-                "reqVersion": "V2.0"
+                "reqVersion": "V2.0",
             }
 
             response = await self._safe_request(
-                "POST",
-                TASK_QUERY_URL,
-                headers=task_headers,
-                json=payload
+                "POST", TASK_QUERY_URL, headers=task_headers, json=payload
             )
             response_data = response.json()
 
@@ -898,7 +1118,10 @@ class JtcBot:
                     task_no = task.get("taskNo")
                     browse_seconds = task.get("browseSeconds", 10)
                     self.task_browse_seconds[task_no] = browse_seconds
-                    print(f"  - {task.get('showTitle')} | 编号: {task_no} | 状态: {task.get('taskStatus')} | 停留: {browse_seconds}秒")
+                    print(
+                        f"  - {task.get('showTitle')} | 编号: {task_no} | "
+                        f"状态: {task.get('taskStatus')} | 停留: {browse_seconds}秒"
+                    )
 
                 return task_data
             return []
@@ -912,7 +1135,9 @@ class JtcBot:
 
         await self.send_data_report("GoToClaimClick", task_info)
         await sleep(200)
-        await self.send_data_report("TaskReceive", task_info, extra_props={"step": "receive_start"})
+        await self.send_data_report(
+            "TaskReceive", task_info, extra_props={"step": "receive_start"}
+        )
         await sleep(200)
         await self.send_data_report("ClaimClick", task_info)
         await sleep(300)
@@ -926,15 +1151,17 @@ class JtcBot:
                     "taskNo": task_no,
                     "reqSource": "WX_XCX_JTC",
                     "platformType": "WX_XCX_JTC",
-                    "osType": "ANDROID"
-                }
+                    "osType": "ANDROID",
+                },
             )
             response_data = response.json()
 
             if self.check_response(response_data):
                 reward = self.safe_get_reward(response_data.get("data", 0))
                 if reward > 0:
-                    print(f"✅ [{self.server}] 领取【{show_title}】奖励 | +{reward}捷停币")
+                    print(
+                        f"✅ [{self.server}] 领取【{show_title}】奖励 | +{reward}捷停币"
+                    )
                 return reward
             return 0
         except Exception as e:
@@ -943,7 +1170,11 @@ class JtcBot:
 
     async def simulate_task_action(self, task_no, task_info=None):
         """模拟任务操作（自动适配接口要求的停留时间）"""
-        await self.send_data_report("TaskStart", {"taskNo": task_no, "showTitle": ""}, extra_props={"step": "start"})
+        await self.send_data_report(
+            "TaskStart",
+            {"taskNo": task_no, "showTitle": ""},
+            extra_props={"step": "start"},
+        )
         await sleep(200)
 
         # 获取接口要求的停留时间，默认10秒
@@ -957,7 +1188,11 @@ class JtcBot:
             await sleep(1000)
             # 严格按照接口要求停留
             await sleep(stay_seconds * 1000)
-            await self.send_data_report("TaskAction", {"taskNo": task_no}, extra_props={"action": "find_discount"})
+            await self.send_data_report(
+                "TaskAction",
+                {"taskNo": task_no},
+                extra_props={"action": "find_discount"},
+            )
             await sleep(500)
 
         elif task_no == "T47":  # 浏览车位优选（已更新为最新编号）
@@ -968,10 +1203,16 @@ class JtcBot:
             await sleep(1000)
             # 严格按照接口要求停留
             await sleep(stay_seconds * 1000)
-            await self.send_data_report("TaskAction", {"taskNo": task_no}, extra_props={"action": "view_parking"})
+            await self.send_data_report(
+                "TaskAction",
+                {"taskNo": task_no},
+                extra_props={"action": "view_parking"},
+            )
             await sleep(500)
 
-        await self.send_data_report("TaskProgress", {"taskNo": task_no}, extra_props={"progress": "100%"})
+        await self.send_data_report(
+            "TaskProgress", {"taskNo": task_no}, extra_props={"progress": "100%"}
+        )
         await sleep(200)
 
     async def complete_task(self, task_no, task_info=None):
@@ -991,7 +1232,9 @@ class JtcBot:
                 await self.send_data_report("GoToFinishClick", task_info)
                 await sleep(500)
 
-            await self.send_data_report("TaskProgress", task_info, extra_props={"progress": "near_finish"})
+            await self.send_data_report(
+                "TaskProgress", task_info, extra_props={"progress": "near_finish"}
+            )
             await sleep(300)
 
             response = await self._safe_request(
@@ -1004,14 +1247,16 @@ class JtcBot:
                     "reqSource": "WX_XCX_JTC",
                     "platformType": "WX_XCX_JTC",
                     "osType": "IOS",
-                    "token": self.token
-                }
+                    "token": self.token,
+                },
             )
             response_data = response.json()
 
             if self.check_response(response_data):
                 await sleep(500)
-                await self.send_data_report("TaskFinish", task_info, extra_props={"stage": "finish"})
+                await self.send_data_report(
+                    "TaskFinish", task_info, extra_props={"stage": "finish"}
+                )
                 await sleep(200)
                 await self.send_data_report("ShowGoToClaim", task_info)
 
@@ -1032,7 +1277,11 @@ class JtcBot:
             response = await self._safe_request(
                 "POST",
                 "/base-gateway/integral/v2/balance/query",
-                json={"reqSource": "WX_XCX_JTC", "userId": self.user_id, "openId": self.open_id}
+                json={
+                    "reqSource": "WX_XCX_JTC",
+                    "userId": self.user_id,
+                    "openId": self.open_id,
+                },
             )
             response_data = response.json()
 
@@ -1055,12 +1304,12 @@ class JtcBot:
             "total_reward": 0,
             "balance": 0,
             "deduct_amount": 0,
-            "error": ""
+            "error": "",
         }
 
-        print(f"\n{'='*40}")
+        print(f"\n{'=' * 40}")
         print(f"[{self.server}] 开始执行任务")
-        print(f"{'='*40}")
+        print(f"{'=' * 40}")
 
         try:
             # 启动延迟
@@ -1126,11 +1375,17 @@ class JtcBot:
                 if task_no not in task_info_map and task_no not in SKIP_TASKS:
                     print(f"➕ [{self.server}] 添加强制任务: {show_title}")
                     incomplete_tasks.append((task_no, show_title))
-                    task_info_map[task_no] = {"taskNo": task_no, "showTitle": show_title, "taskStatus": "GOTO"}
+                    task_info_map[task_no] = {
+                        "taskNo": task_no,
+                        "showTitle": show_title,
+                        "taskStatus": "GOTO",
+                    }
 
             # 领取可领取的任务奖励
             for task_no, show_title in receivable_tasks:
-                reward = await self.receive_task_reward(task_no, task_info_map.get(task_no))
+                reward = await self.receive_task_reward(
+                    task_no, task_info_map.get(task_no)
+                )
                 result["total_reward"] += reward
                 await sleep(1000)
 
@@ -1142,7 +1397,9 @@ class JtcBot:
                     await sleep(1000)
                     # 领取新完成的任务奖励
                     await sleep(3000)
-                    reward = await self.receive_task_reward(task_no, task_info_map.get(task_no))
+                    reward = await self.receive_task_reward(
+                        task_no, task_info_map.get(task_no)
+                    )
                     result["total_reward"] += reward
 
             # 8. 获取最终余额
@@ -1150,7 +1407,10 @@ class JtcBot:
             if balance_info:
                 result["balance"] = balance_info.get("accountAmt", 0)
                 result["deduct_amount"] = balance_info.get("deductAmount", 0)
-                print(f"💰 [{self.server}] 当前余额: {result['balance']}捷停币 | 可抵扣: {result['deduct_amount']}元")
+                print(
+                    f"💰 [{self.server}] 当前余额: {result['balance']}捷停币 | "
+                    f"可抵扣: {result['deduct_amount']}元"
+                )
 
             result["success"] = True
             # 已删除：共获得0捷停币 相关输出
@@ -1162,14 +1422,18 @@ class JtcBot:
 
         return result
 
+
 # ===================== 主程序 =====================
 async def main():
-    print('===== 捷停车每日任务 =====\n')
+    print("===== 捷停车每日任务 =====\n")
     print(f"📅 执行时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"🔌 待执行账号: {len(SERVERS)} 个")
-    print(f"🌐 代理模式: {'单账号独立代理' if ENABLE_PER_ACCOUNT_PROXY else '全局共用代理'}")
-    print(f"📋 执行任务: 每日签到、浏览找优惠(T01)、浏览车位优选(T47)")
-    print(f"🔧 自动适配: 接口要求的停留时间 | 代理自动重连已启用\n")
+    print(
+        "🌐 代理模式: "
+        f"{'单账号独立代理' if ENABLE_PER_ACCOUNT_PROXY else '全局共用代理'}"
+    )
+    print("📋 执行任务: 每日签到、浏览找优惠(T01)、浏览车位优选(T47)")
+    print("🔧 自动适配: 接口要求的停留时间 | 代理自动重连已启用\n")
 
     results = []
     for index, server in enumerate(SERVERS):
@@ -1184,19 +1448,19 @@ async def main():
             results.append(result)
 
         if index < len(SERVERS) - 1:
-            print(f"\n⏳ 等待2秒后执行下一个账号...")
+            print("\n⏳ 等待2秒后执行下一个账号...")
             await sleep(2000)
 
     # 汇总结果
     notify_content = " 捷停车每日任务执行结果\n"
     notify_content += f"\n📅 执行时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    notify_content += f"\n📋 执行任务: 每日签到、浏览找优惠(T01)、浏览车位优选(T47)\n"
+    notify_content += "\n📋 执行任务: 每日签到、浏览找优惠(T01)、浏览车位优选(T47)\n"
 
     for res in results:
         notify_content += f"\n {res['server']} ({res['phone']})\n"
         notify_content += f"- 代理状态：{res['proxy_status']}\n"
         notify_content += f"- 执行状态：{'成功' if res['success'] else '失败'}\n"
-        if res['success']:
+        if res["success"]:
             notify_content += f"- 签到结果：{res['sign_msg']}\n"
             notify_content += f"- 当前余额：{res['balance']}捷停币\n"
             notify_content += f"- 可抵扣金额：{res['deduct_amount']}元\n"
@@ -1205,11 +1469,15 @@ async def main():
 
     await send_plusplus_notification("捷停车每日任务完成", notify_content)
 
-    print('\n' + '='*40)
-    print('🎉 所有账号执行完成')
+    print("\n" + "=" * 40)
+    print("🎉 所有账号执行完成")
     print(f"📊 成功: {sum(1 for r in results if r['success'])}/{len(results)} 个")
-    print(f"💰 今日总获得: {sum(r['total_reward'] for r in results if r['success'])} 捷停币")
-    print('='*40)
+    print(
+        "💰 今日总获得: "
+        f"{sum(r['total_reward'] for r in results if r['success'])} 捷停币"
+    )
+    print("=" * 40)
+
 
 if __name__ == "__main__":
     try:

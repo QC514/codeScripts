@@ -1,82 +1,170 @@
 # === YYB_GO 统一通知注入 begin ===
-import os as __os, sys as __sys, io as __io, atexit as __atexit, re as __re
+import atexit as _yyb_atexit
+import importlib as _yyb_importlib
+import json as _yyb_json
+import os as _yyb_os
+import re as _yyb_re
+import sys as _yyb_sys
+import urllib.request as _yyb_url_request
+
+_YYB_KEY_NAMES = ("QYWX_KEY", "QYWX", "WEWORK_KEY")
+_YYB_LOG_LIMIT = 40
 _yyb_logs = []
-class __LogHook(__io.TextIOBase):
-    def __init__(self, s): self._s = s
-    def write(self, s):
-        if s and s != '\n': _yyb_logs.append(s.rstrip('\n'))
-        self._s.write(s); return len(s)
-    def flush(self): self._s.flush()
-if not isinstance(__sys.stdout, __LogHook): __sys.stdout = __LogHook(__sys.stdout)
-if not isinstance(__sys.stderr, __LogHook): __sys.stderr = __LogHook(__sys.stderr)
+_yyb_notification_sent = False
 
-__pushed = False
-def __push():
-    global __pushed
-    if __pushed: return
-    try:
-        body = '\n'.join(_yyb_logs[-40:])
-        title = __os.path.basename(__sys.argv[0]) if __sys.argv else 'YYB_GO'
-        sn = None
-        try:
-            from sendNotify import sendNotify as _sn
-            sn = _sn
-        except Exception:
-            sn = None
-        if sn and callable(sn):
-            try: sn(title, body); return
-            except Exception: pass
-        key = __resolve_key()
+
+class _YybLogStream:
+    """Mirror a stream and collect complete lines for the final notification."""
+
+    _yyb_output_capture = True
+
+    def __init__(self, stream, prefix=""):
+        self._stream = stream
+        self._prefix = prefix
+        self._buffer = ""
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+    def _capture(self, text):
+        text = text.rstrip("\r")
+        if text:
+            _yyb_logs.append(f"{self._prefix}{text}")
+
+    def capture_pending(self):
+        if self._buffer:
+            self._capture(self._buffer)
+            self._buffer = ""
+
+    def flush(self):
+        self.capture_pending()
+        self._stream.flush()
+
+    def write(self, text):
+        written = self._stream.write(text)
+        self._buffer += text
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            self._capture(line)
+        return written
+
+    def writelines(self, lines):
+        for line in lines:
+            self.write(line)
+
+
+def _yyb_install_output_capture():
+    if not getattr(_yyb_sys.stdout, "_yyb_output_capture", False):
+        _yyb_sys.stdout = _YybLogStream(_yyb_sys.stdout)
+    if not getattr(_yyb_sys.stderr, "_yyb_output_capture", False):
+        _yyb_sys.stderr = _YybLogStream(_yyb_sys.stderr, "[stderr] ")
+
+
+def _yyb_flush_captured_output():
+    for stream in (_yyb_sys.stdout, _yyb_sys.stderr):
+        capture_pending = getattr(stream, "capture_pending", None)
+        if callable(capture_pending):
+            capture_pending()
+
+
+def _yyb_resolve_key():
+    for name in _YYB_KEY_NAMES:
+        key = _yyb_os.environ.get(name)
         if key:
-            import json as __json, urllib.request as __ur
-            data = __json.dumps({'msgtype':'text','text':{'content':f'【{title}】\n{body}'}}).encode('utf-8')
-            req = __ur.Request(f'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}', data=data, headers={'Content-Type':'application/json'})
-            __ur.urlopen(req, timeout=15)
-    except Exception:
-        pass
-    __pushed = True
+            return key
 
-def __resolve_key():
-    k = __os.environ.get('QYWX_KEY') or __os.environ.get('QYWX') or __os.environ.get('WEWORK_KEY')
-    if k: return k
-    for cand in ('sendNotify.js', '/ql/data/scripts/sendNotify.js'):
+    for candidate in ("sendNotify.js", "/ql/data/scripts/sendNotify.js"):
         try:
-            t = open(cand, encoding='utf-8').read()
-            m = __re.search(r"QYWX_KEY\s*=\s*'([^']+)'", t)
-            if not m:
-                m = __re.search(r'QYWX_KEY\s*=\s*"([^"]+)"', t)
-            if m: return m.group(1)
-        except Exception:
-            pass
+            with open(candidate, encoding="utf-8") as notify_file:
+                source = notify_file.read()
+            match = _yyb_re.search(r"QYWX_KEY\s*=\s*['\"]([^'\"]+)['\"]", source)
+            if match:
+                return match.group(1)
+        except (OSError, UnicodeError):
+            continue
     return None
 
-# 自然退出 / sys.exit 走 atexit；os._exit 绕过 atexit，单独拦截
-__orig_os_exit = __os._exit
-def __patched_os_exit(code=0):
-    global __pushed
-    if __pushed:
-        return __orig_os_exit(code)
-    __pushed = True
-    try: __push()
-    except Exception: pass
-    return __orig_os_exit(code)
-try: __os._exit = __patched_os_exit
-except Exception: pass
 
-__atexit.register(__push)
+def _yyb_build_notification():
+    _yyb_flush_captured_output()
+    title = _yyb_os.path.basename(_yyb_sys.argv[0]) if _yyb_sys.argv else "YYB_GO"
+    body = "\n".join(_yyb_logs[-_YYB_LOG_LIMIT:])
+    return title, body or "任务执行完成，无日志输出。"
+
+
+def _yyb_push_notification():
+    global _yyb_notification_sent
+
+    if _yyb_notification_sent:
+        return
+    _yyb_notification_sent = True
+
+    try:
+        title, body = _yyb_build_notification()
+        try:
+            notify_module = _yyb_importlib.import_module("sendNotify")
+            send_notify = getattr(notify_module, "sendNotify", None)
+        except ImportError:
+            send_notify = None
+
+        if callable(send_notify):
+            try:
+                send_notify(title, body)
+                return
+            except Exception:
+                pass
+
+        key = _yyb_resolve_key()
+        if not key:
+            return
+
+        payload = _yyb_json.dumps(
+            {
+                "msgtype": "text",
+                "text": {"content": f"【{title}】\n{body}"},
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+        request = _yyb_url_request.Request(
+            f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        with _yyb_url_request.urlopen(request, timeout=15):
+            pass
+    except Exception:
+        pass
+
+
+_yyb_original_os_exit = _yyb_os._exit
+
+
+def _yyb_patched_os_exit(code=0):
+    _yyb_push_notification()
+    _yyb_original_os_exit(code)
+
+
+_yyb_install_output_capture()
+try:
+    _yyb_os._exit = _yyb_patched_os_exit
+except (AttributeError, TypeError):
+    pass
+_yyb_atexit.register(_yyb_push_notification)
 # === YYB_GO 统一通知注入 end ===
 
 # name: DT生活
 # cron: 0 0 8 * * *
+import json
 import os
 import random
 import time
-import json
-import requests
 from datetime import datetime
+
+import requests
 
 # ===================== 新增：彻底关闭InsecureRequestWarning警告 =====================
 import urllib3
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # ==================================================================================
 
@@ -87,10 +175,10 @@ PLUSPLUS_TOKEN = os.getenv("PLUSPLUS_TOKEN", "")
 
 # 从环境变量 YYB_GO 读取内网登录接口，多条换行分隔
 CODE_URL_LIST = []
-env_YYB_GO = os.getenv("YYB_GO", "")
-if env_YYB_GO:
+env_yyb_go = os.getenv("YYB_GO", "")
+if env_yyb_go:
     # 兼容 \r\n 和 \n 换行，去除每行前后空格，过滤空行
-    raw_lines = env_YYB_GO.splitlines()
+    raw_lines = env_yyb_go.splitlines()
     CODE_URL_LIST = [line.strip() for line in raw_lines if line.strip()]
 
 # 校验是否存在有效服务地址
@@ -125,11 +213,29 @@ TOTAL_POINTS_URL = "https://ebeikeapi.ebeck.cn/api/v2/user/userPointsGoldInfo"
 
 # 随机UA池（防风控）
 USER_AGENT_LIST = [
-    "Mozilla/5.0 (Linux; Android 14; 2512BPNDAC Build/UKQ1.230917.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/146.0.7680.153 Mobile Safari/537.36 XWEB/1460043 MMWEBSDK/20251006 MMWEBID/2089 MicroMessenger/8.0.66.2980(0x28004234) WeChat/arm64 Weixin NetType/WIFI Language/zh_CN ABI/arm64 MiniProgramEnv/android",
-    "Mozilla/5.0 (Linux; Android 13; Redmi K60 Build/TKQ1.221114.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/130.0.6723.102 Mobile Safari/537.36 XWEB/1300003 MMWEBSDK/20250901 MiniProgramEnv/android",
-    "Mozilla/5.0 (Linux; Android 12; MI 11 Build/SKQ1.211006.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/125.0.6422.111 Mobile Safari/537.36 XWEB/1250002 MMWEBSDK/20250801 MiniProgramEnv/android",
+    (
+        "Mozilla/5.0 (Linux; Android 14; 2512BPNDAC Build/UKQ1.230917.001; wv) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 "
+        "Chrome/146.0.7680.153 Mobile Safari/537.36 XWEB/1460043 "
+        "MMWEBSDK/20251006 MMWEBID/2089 MicroMessenger/8.0.66.2980"
+        "(0x28004234) WeChat/arm64 Weixin NetType/WIFI Language/zh_CN "
+        "ABI/arm64 MiniProgramEnv/android"
+    ),
+    (
+        "Mozilla/5.0 (Linux; Android 13; Redmi K60 Build/TKQ1.221114.001; wv) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 "
+        "Chrome/130.0.6723.102 Mobile Safari/537.36 XWEB/1300003 "
+        "MMWEBSDK/20250901 MiniProgramEnv/android"
+    ),
+    (
+        "Mozilla/5.0 (Linux; Android 12; MI 11 Build/SKQ1.211006.001; wv) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 "
+        "Chrome/125.0.6422.111 Mobile Safari/537.36 XWEB/1250002 "
+        "MMWEBSDK/20250801 MiniProgramEnv/android"
+    ),
 ]
 # ======================================================
+
 
 # ====================== 品赞IP代理系统（每个账号独立获取）======================
 def parse_proxy_response(text):
@@ -142,15 +248,23 @@ def parse_proxy_response(text):
     try:
         data = json.loads(text)
         proxy_obj = None
-        
+
         # 品赞标准格式: {code: 0, data: [{ip: "x.x.x.x", port: 12345}]}
-        if data.get("data") and isinstance(data["data"], list) and len(data["data"]) > 0:
+        if (
+            data.get("data")
+            and isinstance(data["data"], list)
+            and len(data["data"]) > 0
+        ):
             proxy_obj = data["data"][0]
         # 普通JSON格式: {ip: "x.x.x.x", port: 12345}
         elif data.get("ip") and data.get("port"):
             proxy_obj = data
         # 嵌套格式: {result: {ip: "x.x.x.x", port: 12345}}
-        elif data.get("result") and data["result"].get("ip") and data["result"].get("port"):
+        elif (
+            data.get("result")
+            and data["result"].get("ip")
+            and data["result"].get("port")
+        ):
             proxy_obj = data["result"]
 
         if proxy_obj:
@@ -158,7 +272,7 @@ def parse_proxy_response(text):
                 "host": proxy_obj.get("ip"),
                 "port": proxy_obj.get("port"),
                 "username": proxy_obj.get("user") or proxy_obj.get("username", ""),
-                "password": proxy_obj.get("pass") or proxy_obj.get("password", "")
+                "password": proxy_obj.get("pass") or proxy_obj.get("password", ""),
             }
     except json.JSONDecodeError:
         pass
@@ -171,10 +285,11 @@ def parse_proxy_response(text):
                 "host": parts[0].strip(),
                 "port": int(parts[1]),
                 "username": parts[2].strip() if len(parts) > 2 else "",
-                "password": parts[3].strip() if len(parts) > 3 else ""
+                "password": parts[3].strip() if len(parts) > 3 else "",
             }
 
     return None
+
 
 def build_proxy_config(proxy_info):
     """生成requests库的代理配置（支持HTTP/SOCKS5）"""
@@ -197,10 +312,8 @@ def build_proxy_config(proxy_info):
         proxy_url = f"http://{auth}{host}:{port}"
         print(f"🔧 生成HTTP代理：{proxy_url}")
 
-    return {
-        "http": proxy_url,
-        "https": proxy_url
-    }
+    return {"http": proxy_url, "https": proxy_url}
+
 
 def validate_proxy(proxy_config):
     """验证代理是否可用"""
@@ -208,10 +321,7 @@ def validate_proxy(proxy_config):
         return False
     try:
         response = requests.get(
-            PROXY_VALIDATE_URL,
-            proxies=proxy_config,
-            timeout=15,
-            verify=False
+            PROXY_VALIDATE_URL, proxies=proxy_config, timeout=15, verify=False
         )
         is_success = response.status_code == 200
         if is_success:
@@ -221,6 +331,7 @@ def validate_proxy(proxy_config):
     except Exception as e:
         print(f"⚠️ 代理验证失败，原因：{str(e)}")
         return False
+
 
 def get_valid_proxy(account_name):
     """获取有效代理（每个账号独立调用）"""
@@ -237,15 +348,18 @@ def get_valid_proxy(account_name):
                 PROXY_API,
                 timeout=15,
                 proxies={"http": None, "https": None},
-                verify=False
+                verify=False,
             )
             proxy_info = parse_proxy_response(response.text)
 
             if not proxy_info:
-                print(f"⚠️ [{account_name}] 第{i+1}次获取代理失败：响应格式无法解析")
+                print(f"⚠️ [{account_name}] 第{i + 1}次获取代理失败：响应格式无法解析")
                 continue
 
-            print(f"✅ [{account_name}] 提取到专属代理：{proxy_info['host']}:{proxy_info['port']}")
+            print(
+                f"✅ [{account_name}] 提取到专属代理："
+                f"{proxy_info['host']}:{proxy_info['port']}"
+            )
 
             # 生成代理配置并验证
             proxy_config = build_proxy_config(proxy_info)
@@ -253,10 +367,10 @@ def get_valid_proxy(account_name):
             if is_valid:
                 return proxy_config
             else:
-                print(f"⚠️ [{account_name}] 第{i+1}次获取的代理不可用，正在重试...")
+                print(f"⚠️ [{account_name}] 第{i + 1}次获取的代理不可用，正在重试...")
 
         except Exception as e:
-            print(f"⚠️ [{account_name}] 第{i+1}次获取代理异常：{str(e)}")
+            print(f"⚠️ [{account_name}] 第{i + 1}次获取代理异常：{str(e)}")
 
         # 重试间隔
         if i < PROXY_RETRY_TIMES - 1:
@@ -264,7 +378,10 @@ def get_valid_proxy(account_name):
 
     print(f"❌ [{account_name}] 连续多次获取代理失败，使用直连")
     return None
+
+
 # ======================================================
+
 
 def parse_yyb_go_entry(raw_value):
     value = str(raw_value or "").strip()
@@ -274,7 +391,7 @@ def parse_yyb_go_entry(raw_value):
     if at_index == -1:
         return value, ""
     server = value[:at_index].strip()
-    ref = value[at_index + 1:].strip()
+    ref = value[at_index + 1 :].strip()
     server = server.removeprefix("http://").removeprefix("https://").rstrip("/")
     return server, ref
 
@@ -294,10 +411,10 @@ def get_wx_code(code_url):
             f"http://{server}/wxapp/getCode",
             json={"ref": ref, "app_id": APP_ID},
             timeout=20,
-            proxies={"http": None, "https": None}
+            proxies={"http": None, "https": None},
         )
         data = res.json()
-        code = (((data.get("data") or {}).get("result") or {}).get("code"))
+        code = ((data.get("data") or {}).get("result") or {}).get("code")
         if data.get("code") == 0 and code:
             print(f"✅ {server} 获取Code成功")
             return code
@@ -305,6 +422,7 @@ def get_wx_code(code_url):
     except Exception as e:
         print(f"❌ 获取Code失败：{str(e)}")
     return None
+
 
 def refresh_token(code_url, proxy_config, account_name):
     """通过对应接口刷新Token【支持代理+直连兜底】"""
@@ -316,12 +434,19 @@ def refresh_token(code_url, proxy_config, account_name):
     headers = {
         "Content-Type": "application/json",
         "charset": "utf-8",
-        "User-Agent": random.choice(USER_AGENT_LIST)
+        "User-Agent": random.choice(USER_AGENT_LIST),
     }
 
     try:
-        payload = {"code": code, "appId": APP_ID, "client": "wxmp", "version": "251", "pid": "", "channeltype": ""}
-        
+        payload = {
+            "code": code,
+            "appId": APP_ID,
+            "client": "wxmp",
+            "version": "251",
+            "pid": "",
+            "channeltype": "",
+        }
+
         # 优先代理请求
         if proxy_config:
             print(f"🌐 [{account_name}] 正在使用专属代理发起登录请求...")
@@ -332,7 +457,7 @@ def refresh_token(code_url, proxy_config, account_name):
                     headers=headers,
                     proxies=proxy_config,
                     timeout=20,
-                    verify=False
+                    verify=False,
                 )
             except Exception as e:
                 if ENABLE_DIRECT_FALLBACK:
@@ -343,7 +468,7 @@ def refresh_token(code_url, proxy_config, account_name):
                         headers=headers,
                         proxies={"http": None, "https": None},
                         timeout=20,
-                        verify=False
+                        verify=False,
                     )
                 else:
                     raise e
@@ -354,7 +479,7 @@ def refresh_token(code_url, proxy_config, account_name):
                 headers=headers,
                 proxies={"http": None, "https": None},
                 timeout=20,
-                verify=False
+                verify=False,
             )
 
         data = res.json()
@@ -364,16 +489,17 @@ def refresh_token(code_url, proxy_config, account_name):
             return token, headers
     except Exception as e:
         print(f"❌ Token获取异常：{str(e)}")
-    
+
     print("❌ Token获取失败")
     return None, None
+
 
 def get_user_info(token, headers, proxy_config, account_name):
     """获取用户信息+总积分【支持代理+直连兜底】"""
     try:
         payload = {"version": "251", "client": "wxmp", "token": token}
         req_headers = {**headers, "Authorization": f"Bearer {token}"}
-        
+
         # 优先代理请求
         if proxy_config:
             try:
@@ -383,7 +509,7 @@ def get_user_info(token, headers, proxy_config, account_name):
                     headers=req_headers,
                     proxies=proxy_config,
                     timeout=20,
-                    verify=False
+                    verify=False,
                 )
             except Exception as e:
                 if ENABLE_DIRECT_FALLBACK:
@@ -394,7 +520,7 @@ def get_user_info(token, headers, proxy_config, account_name):
                         headers=req_headers,
                         proxies={"http": None, "https": None},
                         timeout=20,
-                        verify=False
+                        verify=False,
                     )
                 else:
                     raise e
@@ -405,7 +531,7 @@ def get_user_info(token, headers, proxy_config, account_name):
                 headers=req_headers,
                 proxies={"http": None, "https": None},
                 timeout=20,
-                verify=False
+                verify=False,
             )
 
         data = res.json()
@@ -415,6 +541,7 @@ def get_user_info(token, headers, proxy_config, account_name):
         print(f"❌ 查询用户信息异常：{str(e)}")
         return "未知", "未知", 0
 
+
 def push_plusplus(title, content):
     """PlusPlus推送（带状态返回）"""
     if not PLUSPLUS_TOKEN:
@@ -423,10 +550,7 @@ def push_plusplus(title, content):
     try:
         data = {"token": PLUSPLUS_TOKEN, "title": title, "content": content}
         res = requests.post(
-            "https://www.pushplus.plus/send",
-            json=data,
-            timeout=10,
-            verify=False
+            "https://www.pushplus.plus/send", json=data, timeout=10, verify=False
         )
         result = res.json()
         return result.get("code") == 200
@@ -434,11 +558,12 @@ def push_plusplus(title, content):
         print(f"❌ PushPlus推送异常：{str(e)}")
         return False
 
+
 def do_sign(token, headers, proxy_config, account_name):
     """执行签到【支持代理+直连兜底】"""
     try:
         payload = {"version": "251", "client": "wxmp", "token": token}
-        
+
         # 优先代理请求
         if proxy_config:
             try:
@@ -448,7 +573,7 @@ def do_sign(token, headers, proxy_config, account_name):
                     headers=headers,
                     proxies=proxy_config,
                     timeout=20,
-                    verify=False
+                    verify=False,
                 )
             except Exception as e:
                 if ENABLE_DIRECT_FALLBACK:
@@ -459,7 +584,7 @@ def do_sign(token, headers, proxy_config, account_name):
                         headers=headers,
                         proxies={"http": None, "https": None},
                         timeout=20,
-                        verify=False
+                        verify=False,
                     )
                 else:
                     raise e
@@ -470,7 +595,7 @@ def do_sign(token, headers, proxy_config, account_name):
                 headers=headers,
                 proxies={"http": None, "https": None},
                 timeout=20,
-                verify=False
+                verify=False,
             )
 
         return res.json()
@@ -478,10 +603,11 @@ def do_sign(token, headers, proxy_config, account_name):
         print(f"❌ 签到异常：{str(e)}")
         return None
 
+
 def run_account(code_url, index, global_proxy_config):
     """执行单个账号（对应接口）"""
     account_name = f"账号{index}"
-    print(f"\n=======================================================")
+    print("\n=======================================================")
     print(f"🚀 开始执行 {account_name} | 接口：{code_url}")
     print("=======================================================")
 
@@ -500,7 +626,7 @@ def run_account(code_url, index, global_proxy_config):
             "account": account_name,
             "success": False,
             "proxy_status": proxy_status,
-            "error": "Token获取失败"
+            "error": "Token获取失败",
         }
 
     # 随机延迟 3~8 秒
@@ -516,7 +642,7 @@ def run_account(code_url, index, global_proxy_config):
                 "account": account_name,
                 "success": False,
                 "proxy_status": proxy_status,
-                "error": "签到请求异常"
+                "error": "签到请求异常",
             }
 
         sign_msg = data.get("msg", "完成")
@@ -524,7 +650,9 @@ def run_account(code_url, index, global_proxy_config):
         sign_num = data.get("data", {}).get("sign_num", 0)
 
         # 获取用户信息
-        nickname, uid, total_points = get_user_info(token, headers, proxy_config, account_name)
+        nickname, uid, total_points = get_user_info(
+            token, headers, proxy_config, account_name
+        )
 
         # 控制台简洁展示
         print(f"👤 账户昵称：{nickname}")
@@ -561,7 +689,7 @@ def run_account(code_url, index, global_proxy_config):
             "sign_msg": sign_msg,
             "sign_num": sign_num,
             "get_points": get_points,
-            "total_points": total_points
+            "total_points": total_points,
         }
 
     except Exception as e:
@@ -570,11 +698,12 @@ def run_account(code_url, index, global_proxy_config):
             "account": account_name,
             "success": False,
             "proxy_status": proxy_status,
-            "error": str(e)
+            "error": str(e),
         }
 
+
 if __name__ == "__main__":
-    print('===== DT生活签到（环境变量YYB_GO读取内网多服务+独立代理版）=====\n')
+    print("===== DT生活签到（环境变量YYB_GO读取内网多服务+独立代理版）=====\n")
 
     # 兼容旧逻辑：如果关闭了单账号代理，就全局获取一个共用代理
     global_proxy_config = None
