@@ -205,22 +205,23 @@
   }
 
   function logTag(line) {
-    const lower = line.toLowerCase();
-    if (lower.includes("pushplus") || line.includes("推送")) return "PushPlus";
-    if (line.includes("执行失败") || line.includes("执行异常")) return "账号";
+    const context = line.split("{", 1)[0];
+    const lower = context.toLowerCase();
+    if (lower.includes("pushplus") || context.includes("推送")) return "PushPlus";
+    if (context.includes("执行失败") || context.includes("执行异常")) return "账号";
     if (
-      line.includes("代理") ||
+      context.includes("代理") ||
       lower.includes("proxy") ||
-      (/\d{1,3}(?:\.\d{1,3}){3}:\d+/.test(line) &&
-        ["提取", "生成", "获取"].some((word) => line.includes(word)))
+      (/\d{1,3}(?:\.\d{1,3}){3}:\d+/.test(context) &&
+        ["提取", "生成", "获取"].some((word) => context.includes(word)))
     )
       return "代理";
-    if (line.includes("登录") || lower.includes("token") || line.includes("授权")) return "登录";
-    if (lower.includes("code") || line.includes("取码")) return "取码";
-    if (line.includes("签到") || lower.includes("sign")) return "签到";
-    if (line.includes("积分") || line.includes("余额") || line.includes("账户")) return "账户";
-    if (line.includes("等待") || line.includes("延迟") || lower.includes("sleep")) return "延迟";
-    if (line.includes("账号")) return "账号";
+    if (context.includes("登录") || lower.includes("token") || context.includes("授权")) return "登录";
+    if (lower.includes("code") || context.includes("取码")) return "取码";
+    if (context.includes("签到") || lower.includes("sign")) return "签到";
+    if (context.includes("积分") || context.includes("余额") || context.includes("账户")) return "账户";
+    if (context.includes("等待") || context.includes("延迟") || lower.includes("sleep")) return "延迟";
+    if (context.includes("账号")) return "账号";
     return "任务";
   }
 
@@ -289,9 +290,43 @@
     emitRaw(normalized, level === "error" ? "error" : level === "warn" ? "warn" : "log");
   }
 
+  function compactJsonOutput(value) {
+    const text = String(value);
+    if (!/[\r\n]/.test(text)) return text;
+    const ending = (text.match(/[\r\n]+$/) || [""])[0];
+    const body = ending ? text.slice(0, -ending.length) : text;
+    for (let index = 0; index < body.length; index += 1) {
+      if (body[index] !== "{" && body[index] !== "[") continue;
+      try {
+        const payload = JSON.parse(body.slice(index));
+        return `${body.slice(0, index)}${JSON.stringify(payload)}${ending}`;
+      } catch (_) {}
+    }
+    return text;
+  }
+
+  function formatLogArgs(args) {
+    const values = args.map((value) => {
+      if (value instanceof Error) return value.stack || value.message;
+      if (value === null || typeof value !== "object") return value;
+      try {
+        return JSON.stringify(value);
+      } catch (_) {
+        return util.inspect(value, {
+          breakLength: Infinity,
+          compact: true,
+          depth: null,
+          maxArrayLength: null,
+          maxStringLength: null,
+        });
+      }
+    });
+    return util.format(...values);
+  }
+
   function capture(level, args) {
     try {
-      const text = util.format(...args);
+      const text = compactJsonOutput(formatLogArgs(args));
       for (const line of text.split(/\r?\n/)) processLine(line, level);
     } catch (_) {}
   }

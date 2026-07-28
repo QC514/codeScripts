@@ -273,31 +273,32 @@ def _yyb_is_duplicate_config(line):
 
 
 def _yyb_log_tag(line):
-    lowered = line.lower()
-    if "pushplus" in lowered or "推送" in line:
+    context = line.split("{", 1)[0]
+    lowered = context.lower()
+    if "pushplus" in lowered or "推送" in context:
         return "PushPlus"
-    if "执行失败" in line or "执行异常" in line:
+    if "执行失败" in context or "执行异常" in context:
         return "账号"
     if (
-        "代理" in line
+        "代理" in context
         or "proxy" in lowered
         or (
-            re.search(r"\d{1,3}(?:\.\d{1,3}){3}:\d+", line)
-            and any(word in line for word in ("提取", "生成", "获取"))
+            re.search(r"\d{1,3}(?:\.\d{1,3}){3}:\d+", context)
+            and any(word in context for word in ("提取", "生成", "获取"))
         )
     ):
         return "代理"
-    if "登录" in line or "token" in lowered or "授权" in line:
+    if "登录" in context or "token" in lowered or "授权" in context:
         return "登录"
-    if "code" in lowered or "取码" in line:
+    if "code" in lowered or "取码" in context:
         return "取码"
-    if "签到" in line or "sign" in lowered:
+    if "签到" in context or "sign" in lowered:
         return "签到"
-    if "积分" in line or "余额" in line or "账户" in line:
+    if "积分" in context or "余额" in context or "账户" in context:
         return "账户"
-    if "等待" in line or "延迟" in line or "sleep" in lowered:
+    if "等待" in context or "延迟" in context or "sleep" in lowered:
         return "延迟"
-    if "账号" in line:
+    if "账号" in context:
         return "账号"
     return "任务"
 
@@ -441,6 +442,27 @@ def _yyb_process_line(line, stream, stderr=False):
     _yyb_emit_raw(normalized, stream=stream)
 
 
+def _yyb_compact_json_output(text):
+    value = str(text)
+    if "\n" not in value and "\r" not in value:
+        return value
+    body = value.rstrip("\r\n")
+    ending = value[len(body) :]
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(body):
+        if char not in "[{":
+            continue
+        try:
+            payload, end = decoder.raw_decode(body[index:])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if body[index + end :].strip():
+            continue
+        compact = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        return f"{body[:index]}{compact}{ending}"
+    return value
+
+
 class _YybLogStream:
     """Format, mirror, and collect complete output lines."""
 
@@ -461,11 +483,13 @@ class _YybLogStream:
         self._stream.flush()
 
     def write(self, text):
-        self._buffer += str(text)
+        value = str(text)
+        accepted = len(value)
+        self._buffer += _yyb_compact_json_output(value)
         while "\n" in self._buffer:
             line, self._buffer = self._buffer.split("\n", 1)
             _yyb_process_line(line, self._stream, self._stderr)
-        return len(text)
+        return accepted
 
     def writelines(self, lines):
         for line in lines:
