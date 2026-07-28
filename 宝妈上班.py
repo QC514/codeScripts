@@ -308,10 +308,12 @@ def _yyb_normalize_line(line, stderr=False):
     stripped = line.strip()
     if not stripped:
         return ""
+    account_name = None
     for name in _yyb_display_names.values():
         prefix = f"[{name}]"
         if stripped.startswith(prefix):
-            stripped = f"{name} {stripped[len(prefix) :].strip()}".strip()
+            account_name = name
+            stripped = stripped[len(prefix) :].strip()
             break
     if stripped.startswith("["):
         return stripped
@@ -364,8 +366,14 @@ def _yyb_normalize_line(line, stderr=False):
         icon = "⚠️"
     elif any(word in stripped for word in ("等待", "延迟")):
         icon = "⏳"
+    elif tag == "签到" and "成功" in stripped:
+        icon = "📊"
+    elif tag == "账户":
+        icon = "💰"
     elif any(word in stripped for word in ("成功", "完成", "通过", "获得", "提取到")):
         icon = "✅"
+    elif tag == "取码" and "请求" in stripped:
+        icon = "🌐"
     elif tag == "代理" and "生成" in stripped:
         icon = "🛠️"
     elif tag == "代理":
@@ -374,7 +382,7 @@ def _yyb_normalize_line(line, stderr=False):
         icon = "🔐"
     else:
         icon = "ℹ️"
-    return f"{icon} [{tag}] {stripped}"
+    return f"{icon} [{account_name or tag}] {stripped}"
 
 
 def _yyb_record_status(line):

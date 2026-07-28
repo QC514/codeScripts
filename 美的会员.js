@@ -227,10 +227,12 @@
   function normalizeLine(line, level) {
     let text = line.trim();
     if (!text) return "";
+    let accountName = null;
     for (const name of displayNames.values()) {
       const prefix = `[${name}]`;
       if (text.startsWith(prefix)) {
-        text = `${name} ${text.slice(prefix.length).trim()}`.trim();
+        accountName = name;
+        text = text.slice(prefix.length).trim();
         break;
       }
     }
@@ -242,11 +244,14 @@
     if (level === "error" || /(error|exception|traceback)/i.test(lower) || /(失败|错误|异常)/.test(text)) icon = "❌";
     else if (level === "warn" || /(警告|跳过|已签到|已经签到|不可用|未配置)/.test(text)) icon = "⚠️";
     else if (/(等待|延迟)/.test(text)) icon = "⏳";
+    else if (tag === "签到" && text.includes("成功")) icon = "📊";
+    else if (tag === "账户") icon = "💰";
     else if (/(成功|完成|通过|获得|提取到)/.test(text)) icon = "✅";
+    else if (tag === "取码" && text.includes("请求")) icon = "🌐";
     else if (tag === "代理" && text.includes("生成")) icon = "🛠️";
     else if (tag === "代理") icon = "🌐";
     else if (tag === "登录") icon = "🔐";
-    return `${icon} [${tag}] ${text}`;
+    return `${icon} [${accountName || tag}] ${text}`;
   }
 
   function recordStatus(line) {
