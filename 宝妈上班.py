@@ -370,7 +370,7 @@ def _yyb_process_line(line, stream, stderr=False):
 class _YybLogStream:
     """Format, mirror, and collect complete output lines."""
 
-    _yyb_output_capture = True
+    _yyb_capture_installed = True
 
     def __init__(self, stream, stderr=False):
         self._stream = stream
@@ -399,9 +399,9 @@ class _YybLogStream:
 
 
 def _yyb_install_output_capture():
-    if not getattr(_yyb_sys.stdout, "_yyb_output_capture", False):
+    if not getattr(_yyb_sys.stdout, "_yyb_capture_installed", False):
         _yyb_sys.stdout = _YybLogStream(_yyb_sys.stdout)
-    if not getattr(_yyb_sys.stderr, "_yyb_output_capture", False):
+    if not getattr(_yyb_sys.stderr, "_yyb_capture_installed", False):
         _yyb_sys.stderr = _YybLogStream(_yyb_sys.stderr, stderr=True)
 
 
