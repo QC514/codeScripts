@@ -5,48 +5,346 @@ import json as _yyb_json
 import os as _yyb_os
 import re as _yyb_re
 import sys as _yyb_sys
+import unicodedata as _yyb_unicodedata
 import urllib.request as _yyb_url_request
 
 _YYB_KEY_NAMES = ("QYWX_KEY", "QYWX", "WEWORK_KEY")
 _YYB_LOG_LIMIT = 40
 _yyb_logs = []
 _yyb_notification_sent = False
+_yyb_footer_printed = False
+_yyb_original_stdout = _yyb_sys.stdout
+_yyb_original_stderr = _yyb_sys.stderr
+_yyb_raw_servers = _yyb_os.environ.get("YYB_GO", "")
+_yyb_servers = [item.strip() for item in _yyb_raw_servers.splitlines() if item.strip()]
+_yyb_seen_accounts = []
+_yyb_failed_accounts = set()
+_yyb_current_account = None
+
+
+def _yyb_now_text():
+    from datetime import datetime as _yyb_datetime
+
+    return _yyb_datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _yyb_display_width(text):
+    width = 0
+    for char in str(text):
+        width += 2 if _yyb_unicodedata.east_asian_width(char) in "WFA" else 1
+    return width
+
+
+def _yyb_emit_raw(line="", stream=None):
+    target = stream or _yyb_original_stdout
+    target.write(f"{line}\n")
+    target.flush()
+    if line:
+        _yyb_logs.append(line)
+
+
+def _yyb_emit_box(lines, account=False):
+    top_left, horizontal, top_right = ("┌", "─", "┐") if account else ("╔", "═", "╗")
+    bottom_left, bottom_right = ("└", "┘") if account else ("╚", "╝")
+    vertical = "│" if account else "║"
+    width = max(50, *(max(0, _yyb_display_width(line) + 1) for line in lines))
+    _yyb_emit_raw(top_left + horizontal * width + top_right)
+    for line in lines:
+        padding = max(0, width - 1 - _yyb_display_width(line))
+        _yyb_emit_raw(f"{vertical} {line}{' ' * padding}{vertical}")
+    _yyb_emit_raw(bottom_left + horizontal * width + bottom_right)
+
+
+def _yyb_script_title():
+    source_path = globals().get("__file__") or (
+        _yyb_sys.argv[0] if _yyb_sys.argv else ""
+    )
+    fallback = _yyb_os.path.splitext(_yyb_os.path.basename(source_path))[0] or "YYB_GO"
+    try:
+        with open(source_path, encoding="utf-8") as script_file:
+            source = script_file.read()
+        marker = "\n# === YYB_GO 统一通知注入 end ==="
+        source = source.split(marker, 1)[-1]
+        name_match = _yyb_re.search(r"(?m)^#\s*name:\s*(.+?)\s*$", source)
+        doc_match = _yyb_re.search(
+            r'''(?s)(?:[rubfRUBF]*)?(?:"""|\'\'\')(.*?)(?:"""|\'\'\')''', source
+        )
+        if doc_match:
+            for candidate in doc_match.group(1).splitlines():
+                candidate = candidate.strip()
+                if candidate and not set(candidate) <= {"=", "-", "*"}:
+                    return candidate
+        if name_match:
+            return name_match.group(1).strip()
+    except (OSError, UnicodeError):
+        pass
+    return fallback
+
+
+def _yyb_title_icon(title):
+    for keyword, icon in (
+        ("回收", "♻️"),
+        ("甜心", "🍰"),
+        ("茶", "🧋"),
+        ("酒", "🍺"),
+        ("停车", "🚗"),
+        ("养车", "🚗"),
+        ("绿", "🌿"),
+        ("雀巢", "☕"),
+    ):
+        if keyword in title:
+            return icon
+    return "🚀"
+
+
+def _yyb_emit_startup():
+    if _yyb_servers:
+        _yyb_emit_raw(f"✅ 成功读取 {len(_yyb_servers)} 台内网wxcode服务：")
+        for server in _yyb_servers:
+            _yyb_emit_raw(f" - {server}")
+        _yyb_emit_raw("-" * 60)
+        _yyb_emit_raw()
+
+    title = _yyb_script_title()
+    _yyb_emit_box(
+        [
+            f"{_yyb_title_icon(title)} {title}",
+            f"🕒 启动时间: {_yyb_now_text()}",
+            f"🔢 账号数量: {len(_yyb_servers)}",
+        ]
+    )
+
+
+def _yyb_server_match_values(server):
+    values = [server]
+    address = server.split("@", 1)[0].strip().rstrip("/")
+    values.extend(
+        [
+            address,
+            address.removeprefix("http://").removeprefix("https://"),
+        ]
+    )
+    return [value for value in values if value]
+
+
+def _yyb_ensure_account(server):
+    global _yyb_current_account
+
+    if server in _yyb_seen_accounts:
+        _yyb_current_account = server
+        return
+    _yyb_seen_accounts.append(server)
+    _yyb_current_account = server
+    index = (
+        _yyb_servers.index(server) + 1
+        if server in _yyb_servers
+        else len(_yyb_seen_accounts)
+    )
+    total = len(_yyb_servers) or len(_yyb_seen_accounts)
+    _yyb_emit_raw()
+    _yyb_emit_box(
+        [f"🧩 账号 {index} / {total}", f"🌍 来源 {server}"],
+        account=True,
+    )
+
+
+def _yyb_detect_account(line):
+    for server in _yyb_servers:
+        if any(value in line for value in _yyb_server_match_values(server)):
+            _yyb_ensure_account(server)
+            return
+    match = _yyb_re.search(r"账号\s*(\d+)", line)
+    if match and _yyb_servers:
+        index = int(match.group(1)) - 1
+        if 0 <= index < len(_yyb_servers):
+            _yyb_ensure_account(_yyb_servers[index])
+
+
+def _yyb_is_duplicate_config(line):
+    stripped = line.strip()
+    if "成功读取" in stripped and ("内网" in stripped or "服务" in stripped):
+        return True
+    if stripped.startswith("-") and any(server in stripped for server in _yyb_servers):
+        return True
+    if len(stripped) >= 20 and set(stripped) <= {"-", "=", "_", "━"}:
+        return True
+    return False
+
+
+def _yyb_log_tag(line):
+    lowered = line.lower()
+    if "pushplus" in lowered or "推送" in line:
+        return "PushPlus"
+    if "执行失败" in line or "执行异常" in line:
+        return "账号"
+    if (
+        "代理" in line
+        or "proxy" in lowered
+        or (
+            _yyb_re.search(r"\d{1,3}(?:\.\d{1,3}){3}:\d+", line)
+            and any(word in line for word in ("提取", "生成", "获取"))
+        )
+    ):
+        return "代理"
+    if "登录" in line or "token" in lowered or "授权" in line:
+        return "登录"
+    if "code" in lowered or "取码" in line:
+        return "取码"
+    if "签到" in line or "sign" in lowered:
+        return "签到"
+    if "积分" in line or "余额" in line or "账户" in line:
+        return "账户"
+    if "等待" in line or "延迟" in line or "sleep" in lowered:
+        return "延迟"
+    if "账号" in line:
+        return "账号"
+    return "任务"
+
+
+def _yyb_normalize_line(line, stderr=False):
+    stripped = line.strip()
+    if not stripped:
+        return ""
+    if stripped.startswith("["):
+        return stripped
+    if _yyb_re.match(r"^[^\w\s]{1,3}\s*\[[^]]+\]", stripped):
+        return stripped
+
+    for prefix in (
+        "✅",
+        "❌",
+        "⚠️",
+        "⚠",
+        "ℹ️",
+        "ℹ",
+        "🌐",
+        "🛠️",
+        "🛠",
+        "⏳",
+        "🔐",
+        "🎯",
+        "🎰",
+        "💰",
+        "💸",
+        "📊",
+        "📡",
+        "📝",
+        "🔁",
+        "🚀",
+    ):
+        if stripped.startswith(prefix):
+            stripped = stripped[len(prefix) :].strip()
+            break
+
+    lowered = stripped.lower()
+    tag = _yyb_log_tag(stripped)
+    if stderr or any(word in lowered for word in ("error", "exception", "traceback")):
+        icon = "❌"
+    elif any(word in stripped for word in ("失败", "错误", "异常")):
+        icon = "❌"
+    elif any(
+        word in stripped
+        for word in (
+            "警告",
+            "跳过",
+            "已签到",
+            "已经签到",
+            "不可用",
+            "未配置",
+        )
+    ):
+        icon = "⚠️"
+    elif any(word in stripped for word in ("等待", "延迟")):
+        icon = "⏳"
+    elif any(word in stripped for word in ("成功", "完成", "通过", "获得", "提取到")):
+        icon = "✅"
+    elif tag == "代理" and "生成" in stripped:
+        icon = "🛠️"
+    elif tag == "代理":
+        icon = "🌐"
+    elif tag == "登录":
+        icon = "🔐"
+    else:
+        icon = "ℹ️"
+    return f"{icon} [{tag}] {stripped}"
+
+
+def _yyb_record_status(line):
+    if not _yyb_current_account:
+        return
+    fatal = line.startswith("❌") and any(
+        word in line
+        for word in ("[账号]", "[主程序]", "[登录]", "执行失败", "执行异常")
+    )
+    if fatal:
+        _yyb_failed_accounts.add(_yyb_current_account)
+
+
+def _yyb_emit_footer():
+    global _yyb_footer_printed
+
+    if _yyb_footer_printed:
+        return
+    _yyb_footer_printed = True
+    total = len(_yyb_servers) or len(_yyb_seen_accounts)
+    failed = len(_yyb_failed_accounts)
+    success = max(0, total - failed)
+    title = _yyb_script_title().split("（", 1)[0].split("(", 1)[0]
+    _yyb_emit_raw()
+    _yyb_emit_box(
+        [
+            f"🏁 {title}任务执行完成",
+            f"✅ 成功: {success}",
+            f"❌ 失败: {failed}",
+            f"🕒 结束时间: {_yyb_now_text()}",
+        ]
+    )
+
+
+def _yyb_process_line(line, stream, stderr=False):
+    stripped = line.rstrip("\r")
+    _yyb_detect_account(stripped)
+    if _yyb_is_duplicate_config(stripped):
+        return
+    if stripped.startswith(("╔", "║", "╚", "┌", "│", "└")):
+        return
+    if "任务执行完成" in stripped or _yyb_re.match(
+        r"^[✅❌🕒]\s*(成功|失败|结束时间)\s*[:：]", stripped
+    ):
+        return
+
+    normalized = _yyb_normalize_line(stripped, stderr=stderr)
+    _yyb_record_status(normalized)
+    if "PushPlus" in normalized:
+        _yyb_emit_footer()
+    _yyb_emit_raw(normalized, stream=stream)
 
 
 class _YybLogStream:
-    """Mirror a stream and collect complete lines for the final notification."""
+    """Format, mirror, and collect complete output lines."""
 
     _yyb_output_capture = True
 
-    def __init__(self, stream, prefix=""):
+    def __init__(self, stream, stderr=False):
         self._stream = stream
-        self._prefix = prefix
+        self._stderr = stderr
         self._buffer = ""
 
     def __getattr__(self, name):
         return getattr(self._stream, name)
 
-    def _capture(self, text):
-        text = text.rstrip("\r")
-        if text:
-            _yyb_logs.append(f"{self._prefix}{text}")
-
-    def capture_pending(self):
-        if self._buffer:
-            self._capture(self._buffer)
-            self._buffer = ""
-
     def flush(self):
-        self.capture_pending()
+        if self._buffer:
+            _yyb_process_line(self._buffer, self._stream, self._stderr)
+            self._buffer = ""
         self._stream.flush()
 
     def write(self, text):
-        written = self._stream.write(text)
-        self._buffer += text
+        self._buffer += str(text)
         while "\n" in self._buffer:
             line, self._buffer = self._buffer.split("\n", 1)
-            self._capture(line)
-        return written
+            _yyb_process_line(line, self._stream, self._stderr)
+        return len(text)
 
     def writelines(self, lines):
         for line in lines:
@@ -57,14 +355,12 @@ def _yyb_install_output_capture():
     if not getattr(_yyb_sys.stdout, "_yyb_output_capture", False):
         _yyb_sys.stdout = _YybLogStream(_yyb_sys.stdout)
     if not getattr(_yyb_sys.stderr, "_yyb_output_capture", False):
-        _yyb_sys.stderr = _YybLogStream(_yyb_sys.stderr, "[stderr] ")
+        _yyb_sys.stderr = _YybLogStream(_yyb_sys.stderr, stderr=True)
 
 
 def _yyb_flush_captured_output():
-    for stream in (_yyb_sys.stdout, _yyb_sys.stderr):
-        capture_pending = getattr(stream, "capture_pending", None)
-        if callable(capture_pending):
-            capture_pending()
+    _yyb_sys.stdout.flush()
+    _yyb_sys.stderr.flush()
 
 
 def _yyb_resolve_key():
@@ -72,7 +368,6 @@ def _yyb_resolve_key():
         key = _yyb_os.environ.get(name)
         if key:
             return key
-
     for candidate in ("sendNotify.js", "/ql/data/scripts/sendNotify.js"):
         try:
             with open(candidate, encoding="utf-8") as notify_file:
@@ -98,7 +393,7 @@ def _yyb_push_notification():
     if _yyb_notification_sent:
         return
     _yyb_notification_sent = True
-
+    _yyb_emit_footer()
     try:
         title, body = _yyb_build_notification()
         try:
@@ -106,23 +401,17 @@ def _yyb_push_notification():
             send_notify = getattr(notify_module, "sendNotify", None)
         except ImportError:
             send_notify = None
-
         if callable(send_notify):
             try:
                 send_notify(title, body)
                 return
             except Exception:
                 pass
-
         key = _yyb_resolve_key()
         if not key:
             return
-
         payload = _yyb_json.dumps(
-            {
-                "msgtype": "text",
-                "text": {"content": f"【{title}】\n{body}"},
-            },
+            {"msgtype": "text", "text": {"content": f"【{title}】\n{body}"}},
             ensure_ascii=False,
         ).encode("utf-8")
         request = _yyb_url_request.Request(
@@ -145,6 +434,7 @@ def _yyb_patched_os_exit(code=0):
 
 
 _yyb_install_output_capture()
+_yyb_emit_startup()
 try:
     _yyb_os._exit = _yyb_patched_os_exit
 except (AttributeError, TypeError):
