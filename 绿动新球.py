@@ -1,22 +1,22 @@
 # === YYB_GO 统一通知注入 begin ===
-import atexit as _yyb_atexit
-import importlib as _yyb_importlib
-import json as _yyb_json
-import os as _yyb_os
-import re as _yyb_re
-import sys as _yyb_sys
-import unicodedata as _yyb_unicodedata
-import urllib.parse as _yyb_url_parse
-import urllib.request as _yyb_url_request
+import atexit
+import importlib
+import json
+import os
+import re
+import sys
+import unicodedata
+import urllib.parse
+import urllib.request
 
 _YYB_KEY_NAMES = ("QYWX_KEY", "QYWX", "WEWORK_KEY")
 _YYB_LOG_LIMIT = 40
 _yyb_logs = []
 _yyb_notification_sent = False
 _yyb_footer_printed = False
-_yyb_original_stdout = _yyb_sys.stdout
-_yyb_original_stderr = _yyb_sys.stderr
-_yyb_raw_servers = _yyb_os.environ.get("YYB_GO", "")
+_yyb_original_stdout = sys.stdout
+_yyb_original_stderr = sys.stderr
+_yyb_raw_servers = os.environ.get("YYB_GO", "")
 _yyb_servers = [item.strip() for item in _yyb_raw_servers.splitlines() if item.strip()]
 _yyb_seen_accounts = []
 _yyb_failed_accounts = set()
@@ -25,15 +25,15 @@ _yyb_display_names = {}
 
 
 def _yyb_now_text():
-    from datetime import datetime as _yyb_datetime
+    from datetime import datetime
 
-    return _yyb_datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _yyb_display_width(text):
     width = 0
     for char in str(text):
-        width += 2 if _yyb_unicodedata.east_asian_width(char) in "WFA" else 1
+        width += 2 if unicodedata.east_asian_width(char) in "WFA" else 1
     return width
 
 
@@ -58,17 +58,15 @@ def _yyb_emit_box(lines, account=False):
 
 
 def _yyb_script_title():
-    source_path = globals().get("__file__") or (
-        _yyb_sys.argv[0] if _yyb_sys.argv else ""
-    )
-    fallback = _yyb_os.path.splitext(_yyb_os.path.basename(source_path))[0] or "YYB_GO"
+    source_path = globals().get("__file__") or (sys.argv[0] if sys.argv else "")
+    fallback = os.path.splitext(os.path.basename(source_path))[0] or "YYB_GO"
     try:
         with open(source_path, encoding="utf-8") as script_file:
             source = script_file.read()
         marker = "\n# === YYB_GO 统一通知注入 end ==="
         source = source.split(marker, 1)[-1]
-        name_match = _yyb_re.search(r"(?m)^#\s*name:\s*(.+?)\s*$", source)
-        doc_match = _yyb_re.search(
+        name_match = re.search(r"(?m)^#\s*name:\s*(.+?)\s*$", source)
+        doc_match = re.search(
             r'''(?s)(?:[rubfRUBF]*)?(?:"""|\'\'\')(.*?)(?:"""|\'\'\')''', source
         )
         if doc_match:
@@ -144,18 +142,18 @@ def _yyb_load_display_names():
             continue
         if not address.startswith(("http://", "https://")):
             address = f"http://{address}"
-        query = _yyb_url_parse.urlencode({"openid": openid})
-        request = _yyb_url_request.Request(
+        query = urllib.parse.urlencode({"openid": openid})
+        request = urllib.request.Request(
             f"{address}/accounts/profile?{query}",
             headers={"Accept": "application/json"},
         )
         try:
-            with _yyb_url_request.urlopen(request, timeout=8) as response:
-                payload = _yyb_json.loads(response.read().decode("utf-8"))
+            with urllib.request.urlopen(request, timeout=8) as response:
+                payload = json.loads(response.read().decode("utf-8"))
             data = payload.get("data") if payload.get("code") == 0 else None
             if isinstance(data, dict):
                 name = data.get("nickname") or data.get("alias") or fallback
-                name = _yyb_re.sub(r"[\r\n]+", " ", str(name)).strip()
+                name = re.sub(r"[\r\n]+", " ", str(name)).strip()
                 _yyb_display_names[server] = name or fallback
         except Exception:
             pass
@@ -209,7 +207,7 @@ def _yyb_detect_account(line):
         if any(value in line for value in _yyb_server_match_values(server)[1:]):
             _yyb_ensure_account(server)
             return
-    match = _yyb_re.search(r"账号\s*(\d+)", line)
+    match = re.search(r"账号\s*(\d+)", line)
     if match and _yyb_servers:
         index = int(match.group(1)) - 1
         if 0 <= index < len(_yyb_servers):
@@ -237,7 +235,7 @@ def _yyb_log_tag(line):
         "代理" in line
         or "proxy" in lowered
         or (
-            _yyb_re.search(r"\d{1,3}(?:\.\d{1,3}){3}:\d+", line)
+            re.search(r"\d{1,3}(?:\.\d{1,3}){3}:\d+", line)
             and any(word in line for word in ("提取", "生成", "获取"))
         )
     ):
@@ -268,15 +266,15 @@ def _yyb_normalize_line(line, stderr=False):
             account_name = name
             stripped = stripped[len(prefix) :].strip()
             break
-    stripped = _yyb_re.sub(
+    stripped = re.sub(
         r"(请求\s*YYB\s*Go\s*获取\s*code)\s*[:：].*$",
         r"\1",
         stripped,
-        flags=_yyb_re.IGNORECASE,
+        flags=re.IGNORECASE,
     )
     if stripped.startswith("["):
         return stripped
-    if _yyb_re.match(r"^[^\w\s]{1,3}\s*\[[^]]+\]", stripped):
+    if re.match(r"^[^\w\s]{1,3}\s*\[[^]]+\]", stripped):
         return stripped
 
     for prefix in (
@@ -384,7 +382,7 @@ def _yyb_process_line(line, stream, stderr=False):
     stripped = _yyb_replace_server_names(stripped)
     if stripped.startswith(("╔", "║", "╚", "┌", "│", "└")):
         return
-    if "任务执行完成" in stripped or _yyb_re.match(
+    if "任务执行完成" in stripped or re.match(
         r"^[✅❌🕒]\s*(成功|失败|结束时间)\s*[:：]", stripped
     ):
         return
@@ -428,27 +426,27 @@ class _YybLogStream:
 
 
 def _yyb_install_output_capture():
-    if not getattr(_yyb_sys.stdout, "_yyb_capture_installed", False):
-        _yyb_sys.stdout = _YybLogStream(_yyb_sys.stdout)
-    if not getattr(_yyb_sys.stderr, "_yyb_capture_installed", False):
-        _yyb_sys.stderr = _YybLogStream(_yyb_sys.stderr, stderr=True)
+    if not getattr(sys.stdout, "_yyb_capture_installed", False):
+        sys.stdout = _YybLogStream(sys.stdout)
+    if not getattr(sys.stderr, "_yyb_capture_installed", False):
+        sys.stderr = _YybLogStream(sys.stderr, stderr=True)
 
 
 def _yyb_flush_captured_output():
-    _yyb_sys.stdout.flush()
-    _yyb_sys.stderr.flush()
+    sys.stdout.flush()
+    sys.stderr.flush()
 
 
 def _yyb_resolve_key():
     for name in _YYB_KEY_NAMES:
-        key = _yyb_os.environ.get(name)
+        key = os.environ.get(name)
         if key:
             return key
     for candidate in ("sendNotify.js", "/ql/data/scripts/sendNotify.js"):
         try:
             with open(candidate, encoding="utf-8") as notify_file:
                 source = notify_file.read()
-            match = _yyb_re.search(r"QYWX_KEY\s*=\s*['\"]([^'\"]+)['\"]", source)
+            match = re.search(r"QYWX_KEY\s*=\s*['\"]([^'\"]+)['\"]", source)
             if match:
                 return match.group(1)
         except (OSError, UnicodeError):
@@ -458,7 +456,7 @@ def _yyb_resolve_key():
 
 def _yyb_build_notification():
     _yyb_flush_captured_output()
-    title = _yyb_os.path.basename(_yyb_sys.argv[0]) if _yyb_sys.argv else "YYB_GO"
+    title = os.path.basename(sys.argv[0]) if sys.argv else "YYB_GO"
     body = "\n".join(_yyb_logs[-_YYB_LOG_LIMIT:])
     return title, body or "任务执行完成，无日志输出。"
 
@@ -473,7 +471,7 @@ def _yyb_push_notification():
     try:
         title, body = _yyb_build_notification()
         try:
-            notify_module = _yyb_importlib.import_module("sendNotify")
+            notify_module = importlib.import_module("sendNotify")
             send_notify = getattr(notify_module, "sendNotify", None)
         except ImportError:
             send_notify = None
@@ -486,22 +484,22 @@ def _yyb_push_notification():
         key = _yyb_resolve_key()
         if not key:
             return
-        payload = _yyb_json.dumps(
+        payload = json.dumps(
             {"msgtype": "text", "text": {"content": f"【{title}】\n{body}"}},
             ensure_ascii=False,
         ).encode("utf-8")
-        request = _yyb_url_request.Request(
+        request = urllib.request.Request(
             f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}",
             data=payload,
             headers={"Content-Type": "application/json"},
         )
-        with _yyb_url_request.urlopen(request, timeout=15):
+        with urllib.request.urlopen(request, timeout=15):
             pass
     except Exception:
         pass
 
 
-_yyb_original_os_exit = _yyb_os._exit
+_yyb_original_os_exit = os._exit
 
 
 def _yyb_patched_os_exit(code=0):
@@ -513,10 +511,10 @@ _yyb_load_display_names()
 _yyb_install_output_capture()
 _yyb_emit_startup()
 try:
-    _yyb_os._exit = _yyb_patched_os_exit
+    os._exit = _yyb_patched_os_exit
 except (AttributeError, TypeError):
     pass
-_yyb_atexit.register(_yyb_push_notification)
+atexit.register(_yyb_push_notification)
 # === YYB_GO 统一通知注入 end ===
 
 # name: 绿动新球
