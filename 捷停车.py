@@ -261,6 +261,11 @@ def _yyb_normalize_line(line, stderr=False):
     stripped = line.strip()
     if not stripped:
         return ""
+    for name in _yyb_display_names.values():
+        prefix = f"[{name}]"
+        if stripped.startswith(prefix):
+            stripped = f"{name} {stripped[len(prefix) :].strip()}".strip()
+            break
     if stripped.startswith("["):
         return stripped
     if _yyb_re.match(r"^[^\w\s]{1,3}\s*\[[^]]+\]", stripped):

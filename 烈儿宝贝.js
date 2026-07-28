@@ -227,6 +227,13 @@
   function normalizeLine(line, level) {
     let text = line.trim();
     if (!text) return "";
+    for (const name of displayNames.values()) {
+      const prefix = `[${name}]`;
+      if (text.startsWith(prefix)) {
+        text = `${name} ${text.slice(prefix.length).trim()}`.trim();
+        break;
+      }
+    }
     if (text.startsWith("[") || /^[^\w\s]{1,3}\s*\[[^\]]+\]/u.test(text)) return text;
     text = text.replace(/^(?:✅|❌|⚠️?|ℹ️?|🌐|🛠️?|⏳|🔐|🎯|🎰|💰|💸|📊|📡|📝|🔁|🚀)\s*/u, "");
     const lower = text.toLowerCase();
