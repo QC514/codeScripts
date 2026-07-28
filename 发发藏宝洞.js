@@ -27,6 +27,7 @@
     .split(/\r?\n/)
     .map((item) => item.trim())
     .filter(Boolean);
+  const displayNames = new Map();
 
   function nowText() {
     const parts = new Intl.DateTimeFormat("zh-CN", {
@@ -95,7 +96,7 @@
   function emitStartup() {
     if (servers.length) {
       emitRaw(`✅ 成功读取 ${servers.length} 台内网wxcode服务：`);
-      for (const server of servers) emitRaw(` - ${server}`);
+      for (const server of servers) emitRaw(` - ${displayName(server)}`);
       emitRaw("-".repeat(60));
       emitRaw();
     }
@@ -112,6 +113,54 @@
     return [server, address, address.replace(/^https?:\/\//, "")].filter(Boolean);
   }
 
+  function displayName(server) {
+    return displayNames.get(server) || server.split("@").pop().trim() || server;
+  }
+
+  function loadDisplayNames() {
+    for (const server of servers) {
+      const atIndex = server.lastIndexOf("@");
+      let address = atIndex >= 0 ? server.slice(0, atIndex).trim().replace(/\/+$/, "") : "";
+      const openid = atIndex >= 0 ? server.slice(atIndex + 1).trim() : "";
+      const fallback = openid || server;
+      displayNames.set(server, fallback);
+      if (!address || !openid) continue;
+      if (!/^https?:\/\//i.test(address)) address = `http://${address}`;
+      try {
+        const response = childProcess.spawnSync(
+          "curl",
+          [
+            "--silent",
+            "--show-error",
+            "--max-time",
+            "8",
+            "--get",
+            "--data-urlencode",
+            `openid=${openid}`,
+            `${address}/accounts/profile`,
+          ],
+          { encoding: "utf8", windowsHide: true },
+        );
+        if (response.status !== 0 || !response.stdout) continue;
+        const payload = JSON.parse(response.stdout);
+        const profile = payload && payload.code === 0 ? payload.data : null;
+        const name = profile && (profile.nickname || profile.alias);
+        if (name) displayNames.set(server, String(name).replace(/[\r\n]+/g, " ").trim() || fallback);
+      } catch (_) {}
+    }
+  }
+
+  function replaceServerNames(line) {
+    let text = String(line);
+    for (const server of servers) text = text.split(server).join(displayName(server));
+    const candidates = servers.includes(state.currentAccount) ? [state.currentAccount] : servers;
+    for (const server of candidates) {
+      const values = serverValues(server).slice(1).sort((left, right) => right.length - left.length);
+      for (const value of values) text = text.split(value).join(displayName(server));
+    }
+    return text;
+  }
+
   function ensureAccount(server) {
     state.currentAccount = server;
     if (state.seenAccounts.includes(server)) return;
@@ -121,14 +170,25 @@
       : state.seenAccounts.length;
     emitRaw();
     emitBox(
-      [`🧩 账号 ${index} / ${servers.length || state.seenAccounts.length}`, `🌍 来源 ${server}`],
+      [`🧩 账号 ${index} / ${servers.length || state.seenAccounts.length}`, `🌍 昵称 ${displayName(server)}`],
       true,
     );
   }
 
   function detectAccount(line) {
     for (const server of servers) {
-      if (serverValues(server).some((value) => line.includes(value))) {
+      if (line.includes(server)) {
+        ensureAccount(server);
+        return;
+      }
+    }
+    if (
+      servers.includes(state.currentAccount) &&
+      serverValues(state.currentAccount).some((value) => line.includes(value))
+    )
+      return;
+    for (const server of servers) {
+      if (serverValues(server).slice(1).some((value) => line.includes(value))) {
         ensureAccount(server);
         return;
       }
@@ -207,6 +267,7 @@
   function processLine(line, level) {
     detectAccount(line);
     if (isDuplicateConfig(line)) return;
+    line = replaceServerNames(line);
     if (/^[╔║╚┌│└]/u.test(line.trim())) return;
     if (line.includes("任务执行完成") || /^[✅❌🕒]\s*(成功|失败|结束时间)\s*[:：]/u.test(line.trim())) return;
     const normalized = normalizeLine(line, level);
@@ -274,6 +335,7 @@
     if (key) sendWebhook(key, title, body);
   }
 
+  loadDisplayNames();
   emitStartup();
   const originalExit = process.exit.bind(process);
   process.exit = (code) => {

@@ -53,6 +53,7 @@ import os as _yyb_os
 import re as _yyb_re
 import sys as _yyb_sys
 import unicodedata as _yyb_unicodedata
+import urllib.parse as _yyb_url_parse
 import urllib.request as _yyb_url_request
 
 _YYB_KEY_NAMES = ("WOLF_QYWX_KEY", "QYWX_KEY", "QYWX", "WEWORK_KEY")
@@ -67,6 +68,7 @@ _yyb_servers = [item.strip() for item in _yyb_raw_servers.splitlines() if item.s
 _yyb_seen_accounts = []
 _yyb_failed_accounts = set()
 _yyb_current_account = None
+_yyb_display_names = {}
 
 
 def _yyb_now_text():
@@ -148,7 +150,7 @@ def _yyb_emit_startup():
     if _yyb_servers:
         _yyb_emit_raw(f"✅ 成功读取 {len(_yyb_servers)} 台内网wxcode服务：")
         for server in _yyb_servers:
-            _yyb_emit_raw(f" - {server}")
+            _yyb_emit_raw(f" - {_yyb_display_name(server)}")
         _yyb_emit_raw("-" * 60)
         _yyb_emit_raw()
 
@@ -174,6 +176,52 @@ def _yyb_server_match_values(server):
     return [value for value in values if value]
 
 
+def _yyb_display_name(server):
+    return _yyb_display_names.get(server) or server.split("@", 1)[-1].strip() or server
+
+
+def _yyb_load_display_names():
+    for server in _yyb_servers:
+        address, separator, openid = server.rpartition("@")
+        address = address.strip().rstrip("/")
+        openid = openid.strip()
+        fallback = openid or server
+        _yyb_display_names[server] = fallback
+        if not separator or not address or not openid:
+            continue
+        if not address.startswith(("http://", "https://")):
+            address = f"http://{address}"
+        query = _yyb_url_parse.urlencode({"openid": openid})
+        request = _yyb_url_request.Request(
+            f"{address}/accounts/profile?{query}",
+            headers={"Accept": "application/json"},
+        )
+        try:
+            with _yyb_url_request.urlopen(request, timeout=8) as response:
+                payload = _yyb_json.loads(response.read().decode("utf-8"))
+            data = payload.get("data") if payload.get("code") == 0 else None
+            if isinstance(data, dict):
+                name = data.get("nickname") or data.get("alias") or fallback
+                name = _yyb_re.sub(r"[\r\n]+", " ", str(name)).strip()
+                _yyb_display_names[server] = name or fallback
+        except Exception:
+            pass
+
+
+def _yyb_replace_server_names(line):
+    text = str(line)
+    for server in _yyb_servers:
+        text = text.replace(server, _yyb_display_name(server))
+    candidates = (
+        [_yyb_current_account] if _yyb_current_account in _yyb_servers else _yyb_servers
+    )
+    for server in candidates:
+        values = sorted(_yyb_server_match_values(server)[1:], key=len, reverse=True)
+        for value in values:
+            text = text.replace(value, _yyb_display_name(server))
+    return text
+
+
 def _yyb_ensure_account(server):
     global _yyb_current_account
 
@@ -190,14 +238,22 @@ def _yyb_ensure_account(server):
     total = len(_yyb_servers) or len(_yyb_seen_accounts)
     _yyb_emit_raw()
     _yyb_emit_box(
-        [f"🧩 账号 {index} / {total}", f"🌍 来源 {server}"],
+        [f"🧩 账号 {index} / {total}", f"🌍 昵称 {_yyb_display_name(server)}"],
         account=True,
     )
 
 
 def _yyb_detect_account(line):
     for server in _yyb_servers:
-        if any(value in line for value in _yyb_server_match_values(server)):
+        if server in line:
+            _yyb_ensure_account(server)
+            return
+    if _yyb_current_account in _yyb_servers and any(
+        value in line for value in _yyb_server_match_values(_yyb_current_account)
+    ):
+        return
+    for server in _yyb_servers:
+        if any(value in line for value in _yyb_server_match_values(server)[1:]):
             _yyb_ensure_account(server)
             return
     match = _yyb_re.search(r"账号\s*(\d+)", line)
@@ -353,6 +409,7 @@ def _yyb_process_line(line, stream, stderr=False):
     _yyb_detect_account(stripped)
     if _yyb_is_duplicate_config(stripped):
         return
+    stripped = _yyb_replace_server_names(stripped)
     if stripped.startswith(("╔", "║", "╚", "┌", "│", "└")):
         return
     if "任务执行完成" in stripped or _yyb_re.match(
@@ -480,6 +537,7 @@ def _yyb_patched_os_exit(code=0):
     _yyb_original_os_exit(code)
 
 
+_yyb_load_display_names()
 _yyb_install_output_capture()
 _yyb_emit_startup()
 try:
