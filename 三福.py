@@ -831,8 +831,10 @@ def wx_login(js_code, user_agent, proxies, server):
                 login_url, json=payload, headers=headers, proxies={}, timeout=20
             )
 
-        print(f"[{server}] 登录接口返回：{response.text[:300]}")
-        return response.json()
+        data = response.json()
+        response_json = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+        print(f"[{server}] 登录接口返回：{response_json}")
+        return data
     except Exception as e:
         print(f"❌ [{server}] 登录异常: {str(e)[:60]}")
         return None
