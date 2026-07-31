@@ -24,7 +24,7 @@
     warn: console.warn.bind(console),
   };
   const servers = (process.env.YYB_GO || "")
-    .split(/\r?\n/)
+    .split(/\r?\n|&/)
     .map((item) => item.trim())
     .filter(Boolean);
   const displayNames = new Map();
@@ -428,7 +428,7 @@ const PLUSPLUS_TOKEN = process.env.PLUSPLUS_TOKEN || "";
 let SERVERS = [];
 const envYybGo = process.env.YYB_GO || "";
 if (envYybGo) {
-    const rawLines = envYybGo.split(/\r?\n/);
+    const rawLines = envYybGo.split(/\r?\n|&/);
     SERVERS = rawLines.map(item => item.trim()).filter(item => item);
 }
 // 无有效地址直接退出

@@ -24,7 +24,7 @@
     warn: console.warn.bind(console),
   };
   const servers = (process.env.YYB_GO || "")
-    .split(/\r?\n/)
+    .split(/\r?\n|&/)
     .map((item) => item.trim())
     .filter(Boolean);
   const displayNames = new Map();
@@ -415,7 +415,7 @@ const fs = require("fs");
 const path = require("path");
 // ====================== YYB Go 账号（环境变量 YYB_GO = 地址@微信账号标识，多行） ======================
 const SERVERS = (process.env.YYB_GO || "")
-    .split(/\r?\n/)
+    .split(/\r?\n|&/)
     .map(s => s.trim())
     .filter(Boolean);
 if (!SERVERS.length) {

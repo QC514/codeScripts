@@ -24,7 +24,7 @@
     warn: console.warn.bind(console),
   };
   const servers = (process.env.YYB_GO || "")
-    .split(/\r?\n/)
+    .split(/\r?\n|&/)
     .map((item) => item.trim())
     .filter(Boolean);
   const displayNames = new Map();
@@ -443,7 +443,7 @@ const APPID = "wx49a622805968d156";
 
 // 从环境变量 YYB_GO 读取内网 IP，多个 IP 用换行分隔
 const SERVERS = (process.env.YYB_GO || "")
-    .split(/\r?\n/)
+    .split(/\r?\n|&/)
     .map(s => s.trim())
     .filter(Boolean);
 

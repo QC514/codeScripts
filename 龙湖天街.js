@@ -24,7 +24,7 @@
     warn: console.warn.bind(console),
   };
   const servers = (process.env.YYB_GO || "")
-    .split(/\r?\n/)
+    .split(/\r?\n|&/)
     .map((item) => item.trim())
     .filter(Boolean);
   const displayNames = new Map();
@@ -423,7 +423,7 @@ function buildServers() {
     }
     console.log("YYB_GO 原始内容(前200字): " + raw.slice(0, 200).replace(/\r/g, "").replace(/\n/g, "\\n"));
     return raw
-        .split(/\r?\n/)
+        .split(/\r?\n|&/)
         .map(s => String(s).trim())
         .filter(Boolean)
         .filter(line => {

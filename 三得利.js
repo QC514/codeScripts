@@ -24,7 +24,7 @@
     warn: console.warn.bind(console),
   };
   const servers = (process.env.YYB_GO || "")
-    .split(/\r?\n/)
+    .split(/\r?\n|&/)
     .map((item) => item.trim())
     .filter(Boolean);
   const displayNames = new Map();
@@ -427,7 +427,7 @@ const PLUSPLUS_TOKEN = process.env.PLUSPLUS_TOKEN || "";
 let SERVERS = [];
 if (process.env.YYB_GO) {
     SERVERS = process.env.YYB_GO
-        .split(/\r?\n/) // 兼容Windows换行\r\n、Linux换行\n
+        .split(/\r?\n|&/) // 兼容Windows换行\r\n、Linux换行\n
         .map(item => item.trim())
         .filter(item => item.length > 0); // 过滤空行、纯空格行
 }

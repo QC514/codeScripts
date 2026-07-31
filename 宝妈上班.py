@@ -64,7 +64,7 @@ _yyb_footer_printed = False
 _yyb_original_stdout = sys.stdout
 _yyb_original_stderr = sys.stderr
 _yyb_raw_servers = os.environ.get("YYB_GO", "")
-_yyb_servers = [item.strip() for item in _yyb_raw_servers.splitlines() if item.strip()]
+_yyb_servers = [item.strip() for item in re.split(r"\r?\n|&", _yyb_raw_servers) if item.strip()]
 _yyb_seen_accounts = []
 _yyb_failed_accounts = set()
 _yyb_current_account = None
@@ -1249,7 +1249,7 @@ def main():
         print("  缺少 YYB_GO 配置, 退出")
         sys.exit(1)
 
-    entries = [e for e in YYB_GO_RAW.splitlines() if e.strip()]
+    entries = [e for e in re.split(r"\r?\n|&", YYB_GO_RAW) if e.strip()]
     if not entries:
         print("  YYB_GO 为空, 退出")
         sys.exit(1)

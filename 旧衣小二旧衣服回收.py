@@ -17,7 +17,7 @@ _yyb_footer_printed = False
 _yyb_original_stdout = sys.stdout
 _yyb_original_stderr = sys.stderr
 _yyb_raw_servers = os.environ.get("YYB_GO", "")
-_yyb_servers = [item.strip() for item in _yyb_raw_servers.splitlines() if item.strip()]
+_yyb_servers = [item.strip() for item in re.split(r"\r?\n|&", _yyb_raw_servers) if item.strip()]
 _yyb_seen_accounts = []
 _yyb_failed_accounts = set()
 _yyb_current_account = None
@@ -600,7 +600,7 @@ APP_NAME = "旧衣小二旧衣服回收小程序"
 APPID = "wx426d52c8130b8559"
 
 # 从环境变量 YYB_GO 读取内网 IP，多个 IP 用换行分隔
-SERVERS = [s.strip() for s in os.getenv("YYB_GO", "").splitlines() if s.strip()]
+SERVERS = [s.strip() for s in re.split(r"\r?\n|&", os.getenv("YYB_GO", "")) if s.strip()]
 
 if not SERVERS:
     print("❌ 未配置环境变量 YYB_GO，请设置后重试")

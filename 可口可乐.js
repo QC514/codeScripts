@@ -24,7 +24,7 @@
     warn: console.warn.bind(console),
   };
   const servers = (process.env.YYB_GO || "")
-    .split(/\r?\n/)
+    .split(/\r?\n|&/)
     .map((item) => item.trim())
     .filter(Boolean);
   const displayNames = new Map();
@@ -425,7 +425,7 @@ let SERVERS = [];
 const envYybGo = process.env.YYB_GO || "";
 if (envYybGo) {
     SERVERS = envYybGo
-        .split(/\r?\n/)
+        .split(/\r?\n|&/)
         .map(item => item.trim())
         .filter(item => item.length > 0);
 }

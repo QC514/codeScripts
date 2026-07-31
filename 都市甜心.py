@@ -17,7 +17,7 @@ _yyb_footer_printed = False
 _yyb_original_stdout = sys.stdout
 _yyb_original_stderr = sys.stderr
 _yyb_raw_servers = os.environ.get("YYB_GO", "")
-_yyb_servers = [item.strip() for item in _yyb_raw_servers.splitlines() if item.strip()]
+_yyb_servers = [item.strip() for item in re.split(r"\r?\n|&", _yyb_raw_servers) if item.strip()]
 _yyb_seen_accounts = []
 _yyb_failed_accounts = set()
 _yyb_current_account = None
@@ -600,7 +600,7 @@ APPID = "wx46abbbcfa7cf571a"
 SERVERS = []
 env_yyb_go = os.getenv("YYB_GO", "")
 if env_yyb_go:
-    raw_lines = env_yyb_go.splitlines()
+    raw_lines = re.split(r"\r?\n|&", env_yyb_go)
     # 去除每行首尾空格、过滤空行
     SERVERS = [line.strip() for line in raw_lines if line.strip()]
 
