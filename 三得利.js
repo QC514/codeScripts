@@ -137,7 +137,7 @@
             "--data-urlencode",
             `openid=${openid}`,
           ];
-        if (auth) curlArgs.push("--header", `Authorization: ${auth}`);
+        if (auth) curlArgs.push("--header", `Authorization: Bearer ${auth}`);
         curlArgs.push(`${address}/accounts/profile`);
         const response = childProcess.spawnSync(
           "curl",
@@ -691,7 +691,7 @@ async function getCode(server) {
     const { server: parsedServer, ref, auth } = parseYybGoEntry(server);
     if (!parsedServer || !ref) return null;
 
-    const url = `http://${parsedServer}/wxapp/getCode`;
+    const url = `http://${parsedServer}/wx/code`;
 
     try {
         const { data } = await axios.post(url, {
@@ -700,7 +700,7 @@ async function getCode(server) {
         }, {
             timeout: 20000,
             proxy: false,
-            headers: auth ? { Authorization: auth } : {}
+            headers: auth ? { Authorization: `Bearer ${auth}` } : {}
         });
         const code = data?.data?.result?.code;
         if (data?.code !== 0 || !code) {

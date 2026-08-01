@@ -137,7 +137,7 @@
             "--data-urlencode",
             `openid=${openid}`,
           ];
-        if (auth) curlArgs.push("--header", `Authorization: ${auth}`);
+        if (auth) curlArgs.push("--header", `Authorization: Bearer ${auth}`);
         curlArgs.push(`${address}/accounts/profile`);
         const response = childProcess.spawnSync(
           "curl",
@@ -551,10 +551,10 @@ async function getCode(server) {
     const appId = (typeof APPID !== "undefined") ? APPID : (typeof MINI_APP_ID !== "undefined") ? MINI_APP_ID : "";
     
     try {
-        const { data } = await axios.post("http://" + addr + "/wxapp/getCode", {
+        const { data } = await axios.post("http://" + addr + "/wx/code", {
             ref: ref || "owNAX6gQdCIdZKWsm2c6adr7_eZY",
             app_id: appId
-        }, { timeout: 20000, proxy: false, headers: auth ? { Authorization: auth } : {} });
+        }, { timeout: 20000, proxy: false, headers: auth ? { Authorization: `Bearer ${auth}` } : {} });
         const code = data?.data?.result?.code;
         if (data?.code !== 0 || !code) {
             console.log("❌ " + addr + " 获取code失败: " + JSON.stringify(data));

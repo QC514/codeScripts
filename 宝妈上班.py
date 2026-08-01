@@ -8,7 +8,7 @@
   1. 自动调用 wolf-order/createContribution 赚取积分 (250积分/次)
   2. 每天运行前自动检测 uniIdToken(JWT) 有效期
   3. 即将过期/已过期时, 通过 VX_GO 取码服务自动续期:
-       VX_GO /wxapp/getCode -> 微信登录 code
+       VX_GO /wx/code -> 微信登录 code
        -> uni-id-co loginByWeixin -> 新 uniIdToken
   4. 续期后的新 token 写入本地缓存, 并可写回青龙环境变量
 
@@ -197,7 +197,7 @@ def _yyb_load_display_names():
         query = urllib.parse.urlencode({"openid": openid})
         _headers = {"Accept": "application/json"}
         if auth:
-            _headers["Authorization"] = auth
+            _headers["Authorization"] = f"Bearer {auth}"
         request = urllib.request.Request(
             f"{address}/accounts/profile?{query}",
             headers=_headers,
@@ -692,8 +692,8 @@ def get_yyb_go_code(entry):
         print(f"  [VX_GO] 无效 entry: {entry}")
         return None
     try:
-        url = f"http://{server}/wxapp/getCode"
-        _headers = {"Authorization": auth} if auth else None
+        url = f"http://{server}/wx/code"
+        _headers = {"Authorization": f"Bearer {auth}"} if auth else None
         r = requests.post(
             url, json={"ref": ref, "app_id": TARGET_APPID}, timeout=20, headers=_headers
         ).json()

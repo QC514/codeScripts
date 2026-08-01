@@ -150,7 +150,7 @@ def _yyb_load_display_names():
         query = urllib.parse.urlencode({"openid": openid})
         _headers = {"Accept": "application/json"}
         if auth:
-            _headers["Authorization"] = auth
+            _headers["Authorization"] = f"Bearer {auth}"
         request = urllib.request.Request(
             f"{address}/accounts/profile?{query}",
             headers=_headers,
@@ -820,9 +820,9 @@ def get_wx_code(code_url):
         return None
 
     try:
-        _headers = {"Authorization": auth} if auth else None
+        _headers = {"Authorization": f"Bearer {auth}"} if auth else None
         res = requests.post(
-            f"http://{server}/wxapp/getCode",
+            f"http://{server}/wx/code",
             json={"ref": ref, "app_id": APP_ID},
             timeout=20,
             proxies={"http": None, "https": None},

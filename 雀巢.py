@@ -150,7 +150,7 @@ def _yyb_load_display_names():
         query = urllib.parse.urlencode({"openid": openid})
         _headers = {"Accept": "application/json"}
         if auth:
-            _headers["Authorization"] = auth
+            _headers["Authorization"] = f"Bearer {auth}"
         request = urllib.request.Request(
             f"{address}/accounts/profile?{query}",
             headers=_headers,
@@ -735,9 +735,9 @@ async def get_code_via_yyb(server_entry: str, appid: str) -> Optional[str]:
         print(f"❌ [{server_entry}] 获取code失败 | 缺少openid/ref")
         return None
 
-    url = f"http://{server}/wxapp/getCode"
+    url = f"http://{server}/wx/code"
     try:
-        _headers = {"Authorization": auth} if auth else None
+        _headers = {"Authorization": f"Bearer {auth}"} if auth else None
         async with httpx.AsyncClient(timeout=20.0, trust_env=False) as client:
             response = await client.post(url, json={"ref": ref, "app_id": appid}, headers=_headers)
             res = response.json()

@@ -150,7 +150,7 @@ def _yyb_load_display_names():
         query = urllib.parse.urlencode({"openid": openid})
         _headers = {"Accept": "application/json"}
         if auth:
-            _headers["Authorization"] = auth
+            _headers["Authorization"] = f"Bearer {auth}"
         request = urllib.request.Request(
             f"{address}/accounts/profile?{query}",
             headers=_headers,
@@ -816,12 +816,12 @@ def get_code(server):
     if not parsed_server or not ref:
         return None
 
-    url = f"http://{parsed_server}/wxapp/getCode"
+    url = f"http://{parsed_server}/wx/code"
     payload = {"ref": ref, "app_id": APPID}
     print(f"[{parsed_server}] 请求VX Go获取code：{url}")
 
     try:
-        _headers = {"Authorization": auth} if auth else None
+        _headers = {"Authorization": f"Bearer {auth}"} if auth else None
         res = requests.post(
             url,
             json=payload,
