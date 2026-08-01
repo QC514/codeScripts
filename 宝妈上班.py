@@ -697,7 +697,7 @@ def get_yyb_go_code(entry):
         r = requests.post(
             url, json={"openid": ref, "appid": TARGET_APPID, "data": {}}, timeout=20, headers=_headers
         ).json()
-        code = r.get("data", {}).get("result", {}).get("code")
+        code = r.get("data", {}).get("code")
         if r.get("code") != 0 or not code:
             print(
                 f"  [VX_GO] 取码失败 ({ref}): "

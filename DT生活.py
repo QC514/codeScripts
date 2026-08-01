@@ -829,7 +829,7 @@ def get_wx_code(code_url):
             headers=_headers,
         )
         data = res.json()
-        code = ((data.get("data") or {}).get("result") or {}).get("code")
+        code = (data.get("data") or {}).get("code")
         if data.get("code") == 0 and code:
             print(f"✅ {server} 获取Code成功")
             return code

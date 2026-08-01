@@ -742,7 +742,7 @@ async def get_code_via_yyb(server_entry: str, appid: str) -> Optional[str]:
             response = await client.post(url, json={"openid": ref, "appid": appid, "data": {}}, headers=_headers)
             res = response.json()
 
-        code = ((res.get("data") or {}).get("result") or {}).get("code")
+        code = (res.get("data") or {}).get("code")
         if res.get("code") != 0 or not code:
             print(f"❌ [{server_entry}] 获取code失败 | 返回异常: {str(res)[:200]}")
             return None

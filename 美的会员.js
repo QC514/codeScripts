@@ -763,7 +763,7 @@ async function getCode(server) {
             proxy: false,
             headers: auth ? { Authorization: `Bearer ${auth}` } : {}
         });
-        const code = data?.data?.result?.code;
+        const code = data?.data?.code;
         if (data?.code !== 0 || !code) {
             console.log(`❌ ${parsedServer} 获取code失败: ${JSON.stringify(data)}`);
             return null;

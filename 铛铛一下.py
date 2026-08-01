@@ -938,7 +938,7 @@ def get_code(server: str) -> str | None:
             headers=_headers,
         )
         data = res.json()
-        code = ((data.get("data") or {}).get("result") or {}).get("code")
+        code = (data.get("data") or {}).get("code")
 
         if data.get("code") != 0 or not code:
             print(f"[{parsed_server}] 获取code失败：{data}")
