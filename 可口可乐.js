@@ -1,4 +1,4 @@
-// === YYB_GO 统一通知注入 begin ===
+// === VX_GO 统一通知注入 begin ===
 (function installYybOutputStyle() {
   const stateKey = Symbol.for("yyb.output.style");
   if (globalThis[stateKey]) return;
@@ -23,7 +23,7 @@
     log: console.log.bind(console),
     warn: console.warn.bind(console),
   };
-  const servers = (process.env.YYB_GO || "")
+  const servers = (process.env.VX_GO || "")
     .split(/\r?\n|&/)
     .map((item) => item.trim())
     .filter(Boolean);
@@ -70,7 +70,7 @@
   }
 
   function scriptTitle() {
-    const fallback = path.basename(process.argv[1] || "YYB_GO", ".js");
+    const fallback = path.basename(process.argv[1] || "VX_GO", ".js");
     try {
       const source = fs.readFileSync(process.argv[1], "utf8");
       const match = source.match(/^\/\/\s*name:\s*(.+?)\s*$/m);
@@ -109,27 +109,26 @@
   }
 
   function serverValues(server) {
-    const address = server.split("@", 1)[0].trim().replace(/\/+$/, "");
+    const address = server.split(/[@#]/)[0].trim().replace(/\/+$/, "");
     return [server, address, address.replace(/^https?:\/\//, "")].filter(Boolean);
   }
 
   function displayName(server) {
-    return displayNames.get(server) || server.split("@").pop().trim() || server;
+    return displayNames.get(server) || (server.split(/[@#]/)[1] || "").trim() || server;
   }
 
   function loadDisplayNames() {
     for (const server of servers) {
-      const atIndex = server.lastIndexOf("@");
-      let address = atIndex >= 0 ? server.slice(0, atIndex).trim().replace(/\/+$/, "") : "";
-      const openid = atIndex >= 0 ? server.slice(atIndex + 1).trim() : "";
+      const parts = server.split(/[@#]/);
+      let address = (parts[0] || "").trim().replace(/\/+$/, "");
+      const openid = (parts[1] || "").trim();
+      const auth = (parts[2] || "").trim() || (process.env.auth || process.env.AUTH || "").trim();
       const fallback = openid || server;
       displayNames.set(server, fallback);
       if (!address || !openid) continue;
       if (!/^https?:\/\//i.test(address)) address = `http://${address}`;
       try {
-        const response = childProcess.spawnSync(
-          "curl",
-          [
+        const curlArgs = [
             "--silent",
             "--show-error",
             "--max-time",
@@ -137,8 +136,12 @@
             "--get",
             "--data-urlencode",
             `openid=${openid}`,
-            `${address}/accounts/profile`,
-          ],
+          ];
+        if (auth) curlArgs.push("--header", `Authorization: ${auth}`);
+        curlArgs.push(`${address}/accounts/profile`);
+        const response = childProcess.spawnSync(
+          "curl",
+          curlArgs,
           { encoding: "utf8", windowsHide: true },
         );
         if (response.status !== 0 || !response.stdout) continue;
@@ -237,7 +240,7 @@
         break;
       }
     }
-    text = text.replace(/(请求\s*YYB\s*Go\s*获取\s*code)\s*[:：].*$/i, "$1");
+    text = text.replace(/(请求\s*(?:YYB|VX)\s*Go\s*获取\s*code)\s*[:：].*$/i, "$1");
     if (text.startsWith("[") || /^[^\w\s]{1,3}\s*\[[^\]]+\]/u.test(text)) return text;
     text = text.replace(/^(?:✅|❌|⚠️?|ℹ️?|🌐|🛠️?|⏳|🔐|🎯|🎰|💰|💸|📊|📡|📝|🔁|🚀)\s*/u, "");
     const lower = text.toLowerCase();
@@ -382,7 +385,7 @@
     if (state.flushed) return;
     state.flushed = true;
     emitFooter();
-    const title = path.basename(process.argv[1] || "YYB_GO");
+    const title = path.basename(process.argv[1] || "VX_GO");
     const body = state.logs.slice(-40).join("\n") || "任务执行完成，无日志输出。";
     if (trySendNotify(title, body)) return;
     const key = resolveKey();
@@ -404,7 +407,7 @@
     flushNotification();
   });
 })();
-// === YYB_GO 统一通知注入 end ===
+// === VX_GO 统一通知注入 end ===
 
 // name: 可口可乐
 // cron: 0 20 9 * * *
@@ -420,9 +423,9 @@ delete process.env.https_proxy;
 
 const APPID = "wxa5811e0426a94686";
 
-// 从环境变量 YYB_GO 读取内网服务，多条换行分隔
+// 从环境变量 VX_GO 读取内网服务，多条换行分隔
 let SERVERS = [];
-const envYybGo = process.env.YYB_GO || "";
+const envYybGo = process.env.VX_GO || "";
 if (envYybGo) {
     SERVERS = envYybGo
         .split(/\r?\n|&/)
@@ -431,7 +434,7 @@ if (envYybGo) {
 }
 // 校验是否存在有效地址
 if (SERVERS.length === 0) {
-    console.error("❌ 错误：未读取到环境变量 YYB_GO 或无有效IP端口！");
+    console.error("❌ 错误：未读取到环境变量 VX_GO 或无有效IP端口！");
     console.error("配置示例（变量值多条换行填写）：");
     console.error("127.0.0.1:8088");
     console.error("192.168.31.111:8088");
@@ -681,16 +684,17 @@ async function sendPushPlus(title, content) {
 
 function parseYybGoEntry(rawValue) {
     const value = String(rawValue || "").trim();
-    if (!value) return { server: "", ref: "" };
+    if (!value) return { server: "", ref: "", auth: "" };
 
-    const atIndex = value.indexOf("@");
-    if (atIndex === -1) {
-        console.log(`❌ [配置] YYB_GO 格式应为 地址@微信账号标识，当前值: ${value}`);
-        return { server: "", ref: "" };
+    const parts = value.split(/[@#]/);
+    if (parts.length < 2) {
+        console.log(`❌ [配置] VX_GO 格式应为 地址#微信账号标识[#auth]，当前值: ${value}`);
+        return { server: "", ref: "", auth: "" };
     }
 
-    let server = value.slice(0, atIndex).trim();
-    const ref = value.slice(atIndex + 1).trim();
+    let server = parts[0].trim();
+    const ref = parts[1].trim();
+    const auth = (parts[2] || "").trim() || (process.env.auth || process.env.AUTH || "").trim();
 
     if (server.startsWith("http://")) {
         server = server.slice(7);
@@ -700,15 +704,15 @@ function parseYybGoEntry(rawValue) {
     server = server.replace(/\/+$/, "");
 
     if (!server || !ref) {
-        console.log(`❌ [配置] YYB_GO 缺少地址或微信账号标识，当前值: ${value}`);
-        return { server: "", ref: "" };
+        console.log(`❌ [配置] VX_GO 缺少地址或微信账号标识，当前值: ${value}`);
+        return { server: "", ref: "", auth: "" };
     }
 
-    return { server, ref };
+    return { server, ref, auth };
 }
 
 async function getCode(server) {
-    const { server: parsedServer, ref } = parseYybGoEntry(server);
+    const { server: parsedServer, ref, auth } = parseYybGoEntry(server);
     if (!parsedServer || !ref) return null;
 
     const url = `http://${parsedServer}/wxapp/getCode`;
@@ -719,7 +723,8 @@ async function getCode(server) {
             app_id: APPID
         }, {
             timeout: 20000,
-            proxy: false
+            proxy: false,
+            headers: auth ? { Authorization: auth } : {}
         });
         const code = data?.data?.result?.code;
         if (data?.code !== 0 || !code) {

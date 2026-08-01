@@ -1,4 +1,4 @@
-// === YYB_GO 统一通知注入 begin ===
+// === VX_GO 统一通知注入 begin ===
 (function installYybOutputStyle() {
   const stateKey = Symbol.for("yyb.output.style");
   if (globalThis[stateKey]) return;
@@ -23,7 +23,7 @@
     log: console.log.bind(console),
     warn: console.warn.bind(console),
   };
-  const servers = (process.env.YYB_GO || "")
+  const servers = (process.env.VX_GO || "")
     .split(/\r?\n|&/)
     .map((item) => item.trim())
     .filter(Boolean);
@@ -70,7 +70,7 @@
   }
 
   function scriptTitle() {
-    const fallback = path.basename(process.argv[1] || "YYB_GO", ".js");
+    const fallback = path.basename(process.argv[1] || "VX_GO", ".js");
     try {
       const source = fs.readFileSync(process.argv[1], "utf8");
       const match = source.match(/^\/\/\s*name:\s*(.+?)\s*$/m);
@@ -109,27 +109,26 @@
   }
 
   function serverValues(server) {
-    const address = server.split("@", 1)[0].trim().replace(/\/+$/, "");
+    const address = server.split(/[@#]/)[0].trim().replace(/\/+$/, "");
     return [server, address, address.replace(/^https?:\/\//, "")].filter(Boolean);
   }
 
   function displayName(server) {
-    return displayNames.get(server) || server.split("@").pop().trim() || server;
+    return displayNames.get(server) || (server.split(/[@#]/)[1] || "").trim() || server;
   }
 
   function loadDisplayNames() {
     for (const server of servers) {
-      const atIndex = server.lastIndexOf("@");
-      let address = atIndex >= 0 ? server.slice(0, atIndex).trim().replace(/\/+$/, "") : "";
-      const openid = atIndex >= 0 ? server.slice(atIndex + 1).trim() : "";
+      const parts = server.split(/[@#]/);
+      let address = (parts[0] || "").trim().replace(/\/+$/, "");
+      const openid = (parts[1] || "").trim();
+      const auth = (parts[2] || "").trim() || (process.env.auth || process.env.AUTH || "").trim();
       const fallback = openid || server;
       displayNames.set(server, fallback);
       if (!address || !openid) continue;
       if (!/^https?:\/\//i.test(address)) address = `http://${address}`;
       try {
-        const response = childProcess.spawnSync(
-          "curl",
-          [
+        const curlArgs = [
             "--silent",
             "--show-error",
             "--max-time",
@@ -137,8 +136,12 @@
             "--get",
             "--data-urlencode",
             `openid=${openid}`,
-            `${address}/accounts/profile`,
-          ],
+          ];
+        if (auth) curlArgs.push("--header", `Authorization: ${auth}`);
+        curlArgs.push(`${address}/accounts/profile`);
+        const response = childProcess.spawnSync(
+          "curl",
+          curlArgs,
           { encoding: "utf8", windowsHide: true },
         );
         if (response.status !== 0 || !response.stdout) continue;
@@ -237,7 +240,7 @@
         break;
       }
     }
-    text = text.replace(/(请求\s*YYB\s*Go\s*获取\s*code)\s*[:：].*$/i, "$1");
+    text = text.replace(/(请求\s*(?:YYB|VX)\s*Go\s*获取\s*code)\s*[:：].*$/i, "$1");
     if (text.startsWith("[") || /^[^\w\s]{1,3}\s*\[[^\]]+\]/u.test(text)) return text;
     text = text.replace(/^(?:✅|❌|⚠️?|ℹ️?|🌐|🛠️?|⏳|🔐|🎯|🎰|💰|💸|📊|📡|📝|🔁|🚀)\s*/u, "");
     const lower = text.toLowerCase();
@@ -382,7 +385,7 @@
     if (state.flushed) return;
     state.flushed = true;
     emitFooter();
-    const title = path.basename(process.argv[1] || "YYB_GO");
+    const title = path.basename(process.argv[1] || "VX_GO");
     const body = state.logs.slice(-40).join("\n") || "任务执行完成，无日志输出。";
     if (trySendNotify(title, body)) return;
     const key = resolveKey();
@@ -404,7 +407,7 @@
     flushNotification();
   });
 })();
-// === YYB_GO 统一通知注入 end ===
+// === VX_GO 统一通知注入 end ===
 
 // name: 龙湖天街
 // cron: 42 9 * * *
@@ -413,15 +416,15 @@ const axios = require("axios");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-// ====================== YYB Go 账号（环境变量 YYB_GO = 多行，每行 地址@微信账号标识） ======================
-// 任何形如 [object Object] 或不含 @ 的脏行都会被自动跳过，不影响其他有效账号。
+// ====================== VX Go 账号（环境变量 VX_GO = 多行，每行 地址#微信账号标识[#auth]） ======================
+// 任何形如 [object Object] 或不含 @/# 的脏行都会被自动跳过，不影响其他有效账号。
 function buildServers() {
-    const raw = String(process.env.YYB_GO || "").trim();
+    const raw = String(process.env.VX_GO || "").trim();
     if (!raw) {
-        console.error("未配置环境变量 YYB_GO，请设置后重试（格式：地址@微信账号标识，多行换行）");
+        console.error("未配置环境变量 VX_GO，请设置后重试（格式：地址#微信账号标识[#auth]，多行换行）");
         process.exit(1);
     }
-    console.log("YYB_GO 原始内容(前200字): " + raw.slice(0, 200).replace(/\r/g, "").replace(/\n/g, "\\n"));
+    console.log("VX_GO 原始内容(前200字): " + raw.slice(0, 200).replace(/\r/g, "").replace(/\n/g, "\\n"));
     return raw
         .split(/\r?\n|&/)
         .map(s => String(s).trim())
@@ -431,8 +434,8 @@ function buildServers() {
                 console.log("已跳过无效行: [object Object]");
                 return false;
             }
-            if (!line.includes("@")) {
-                console.log("YYB_GO 格式应为 地址@微信账号标识，已跳过当前值: " + line);
+            if (!/[@#]/.test(line)) {
+                console.log("VX_GO 格式应为 地址#微信账号标识[#auth]，已跳过当前值: " + line);
                 return false;
             }
             return true;
@@ -440,31 +443,32 @@ function buildServers() {
 }
 const SERVERS = buildServers();
 if (!SERVERS.length) {
-    console.error("未配置有效的 YYB_GO 账号（每行格式：地址@微信账号标识）");
+    console.error("未配置有效的 VX_GO 账号（每行格式：地址#微信账号标识[#auth]）");
     process.exit(1);
 }
 function parseYybGoEntry(rawValue) {
     const value = String(rawValue || "").trim();
-    if (!value) return { server: "", ref: "" };
-    const atIndex = value.indexOf("@");
-    if (atIndex === -1) {
-        console.log("YYB_GO 格式应为 地址@微信账号标识，当前值: " + value);
-        return { server: "", ref: "" };
+    if (!value) return { server: "", ref: "", auth: "" };
+    const parts = value.split(/[@#]/);
+    if (parts.length < 2) {
+        console.log("VX_GO 格式应为 地址#微信账号标识[#auth]，当前值: " + value);
+        return { server: "", ref: "", auth: "" };
     }
-    let server = value.slice(0, atIndex).trim();
-    const ref = value.slice(atIndex + 1).trim();
+    let server = parts[0].trim();
+    const ref = parts[1].trim();
+    const auth = (parts[2] || "").trim() || (process.env.auth || process.env.AUTH || "").trim();
     if (server.startsWith("http://")) server = server.slice(7);
     else if (server.startsWith("https://")) server = server.slice(8);
     server = server.replace(/\/+$/, "");
-    if (!server || !ref) return { server: "", ref: "" };
-    return { server, ref };
+    if (!server || !ref) return { server: "", ref: "", auth: "" };
+    return { server, ref, auth };
 }
 async function getCode(server) {
-    const { server: parsedServer, ref } = parseYybGoEntry(server);
+    const { server: parsedServer, ref, auth } = parseYybGoEntry(server);
     if (!parsedServer || !ref) return null;
     const url = "http://" + parsedServer + "/wxapp/getCode";
     try {
-        const { data } = await axios.post(url, { ref, app_id: MINI_APP_ID }, { timeout: 20000, proxy: false });
+        const { data } = await axios.post(url, { ref, app_id: MINI_APP_ID }, { timeout: 20000, proxy: false, headers: auth ? { Authorization: auth } : {} });
         const code = data && data.data && data.data.result && data.data.result.code;
         if (!data || data.code !== 0 || !code) {
             console.log(parsedServer + " 获取code失败: " + JSON.stringify(data));
@@ -872,14 +876,14 @@ class Task {
 
     async getLoginCode() {
         const code = await getCode(this.server);
-        if (!code) console.log(`账号[${this.index}] 获取微信code失败：请检查 YYB_GO 格式是否为 地址@微信账号标识（每行一个）且 YYB Go 服务可访问`);
+        if (!code) console.log(`账号[${this.index}] 获取微信code失败：请检查 VX_GO 格式是否为 地址#微信账号标识[#auth]（每行一个）且 VX Go 服务可访问`);
         return code;
     }
 
     async loginByWxCode() {
         const code = await this.getLoginCode();
         if (!code) {
-            throw new Error(`获取微信code失败：请检查 YYB_GO 中该账号在 YYB Go 是否已绑定龙湖天街小程序（appId ${MINI_APP_ID}）`);
+            throw new Error(`获取微信code失败：请检查 VX_GO 中该账号在 VX Go 是否已绑定龙湖天街小程序（appId ${MINI_APP_ID}）`);
         }
         const checkData = {
             appId: MINI_APP_ID,

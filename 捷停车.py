@@ -1,4 +1,4 @@
-# === YYB_GO 统一通知注入 begin ===
+# === VX_GO 统一通知注入 begin ===
 import atexit
 import importlib
 import json
@@ -16,7 +16,7 @@ _yyb_notification_sent = False
 _yyb_footer_printed = False
 _yyb_original_stdout = sys.stdout
 _yyb_original_stderr = sys.stderr
-_yyb_raw_servers = os.environ.get("YYB_GO", "")
+_yyb_raw_servers = os.environ.get("VX_GO", "")
 _yyb_servers = [item.strip() for item in re.split(r"\r?\n|&", _yyb_raw_servers) if item.strip()]
 _yyb_seen_accounts = []
 _yyb_failed_accounts = set()
@@ -59,11 +59,11 @@ def _yyb_emit_box(lines, account=False):
 
 def _yyb_script_title():
     source_path = globals().get("__file__") or (sys.argv[0] if sys.argv else "")
-    fallback = os.path.splitext(os.path.basename(source_path))[0] or "YYB_GO"
+    fallback = os.path.splitext(os.path.basename(source_path))[0] or "VX_GO"
     try:
         with open(source_path, encoding="utf-8") as script_file:
             source = script_file.read()
-        marker = "\n# === YYB_GO 统一通知注入 end ==="
+        marker = "\n# === VX_GO 统一通知注入 end ==="
         source = source.split(marker, 1)[-1]
         name_match = re.search(r"(?m)^#\s*name:\s*(.+?)\s*$", source)
         doc_match = re.search(
@@ -117,7 +117,7 @@ def _yyb_emit_startup():
 
 def _yyb_server_match_values(server):
     values = [server]
-    address = server.split("@", 1)[0].strip().rstrip("/")
+    address = re.split(r"[@#]", server, maxsplit=1)[0].strip().rstrip("/")
     values.extend(
         [
             address,
@@ -128,14 +128,19 @@ def _yyb_server_match_values(server):
 
 
 def _yyb_display_name(server):
-    return _yyb_display_names.get(server) or server.split("@", 1)[-1].strip() or server
+    if server in _yyb_display_names:
+        return _yyb_display_names[server]
+    _parts = re.split(r"[@#]", server, maxsplit=2)
+    return _parts[1].strip() if len(_parts) >= 2 and _parts[1].strip() else server
 
 
 def _yyb_load_display_names():
     for server in _yyb_servers:
-        address, separator, openid = server.rpartition("@")
-        address = address.strip().rstrip("/")
-        openid = openid.strip()
+        _parts = re.split(r"[@#]", server, maxsplit=2)
+        address = _parts[0].strip().rstrip("/") if _parts else ""
+        openid = _parts[1].strip() if len(_parts) > 1 else ""
+        auth = (_parts[2].strip() if len(_parts) > 2 else "") or os.environ.get("auth", "") or os.environ.get("AUTH", "")
+        separator = len(_parts) >= 2
         fallback = openid or server
         _yyb_display_names[server] = fallback
         if not separator or not address or not openid:
@@ -143,9 +148,12 @@ def _yyb_load_display_names():
         if not address.startswith(("http://", "https://")):
             address = f"http://{address}"
         query = urllib.parse.urlencode({"openid": openid})
+        _headers = {"Accept": "application/json"}
+        if auth:
+            _headers["Authorization"] = auth
         request = urllib.request.Request(
             f"{address}/accounts/profile?{query}",
-            headers={"Accept": "application/json"},
+            headers=_headers,
         )
         try:
             with urllib.request.urlopen(request, timeout=8) as response:
@@ -268,7 +276,7 @@ def _yyb_normalize_line(line, stderr=False):
             stripped = stripped[len(prefix) :].strip()
             break
     stripped = re.sub(
-        r"(请求\s*YYB\s*Go\s*获取\s*code)\s*[:：].*$",
+        r"(请求\s*(?:YYB|VX)\s*Go\s*获取\s*code)\s*[:：].*$",
         r"\1",
         stripped,
         flags=re.IGNORECASE,
@@ -496,7 +504,7 @@ def _yyb_resolve_key():
 
 def _yyb_build_notification():
     _yyb_flush_captured_output()
-    title = os.path.basename(sys.argv[0]) if sys.argv else "YYB_GO"
+    title = os.path.basename(sys.argv[0]) if sys.argv else "VX_GO"
     body = "\n".join(_yyb_logs[-_YYB_LOG_LIMIT:])
     return title, body or "任务执行完成，无日志输出。"
 
@@ -556,7 +564,7 @@ try:
 except (AttributeError, TypeError):
     pass
 atexit.register(_yyb_push_notification)
-# === YYB_GO 统一通知注入 end ===
+# === VX_GO 统一通知注入 end ===
 
 # name: 捷停车
 # cron: 0 20 10 * * *
@@ -568,7 +576,7 @@ atexit.register(_yyb_push_notification)
 # ==============================================
 #
 # 【青龙环境变量说明】
-# YYB_GO 必填：wxcode服务地址，多地址换行填写
+# VX_GO 必填：wxcode服务地址，多地址换行填写
 # PROXY_API 可选：品赞代理提取链接
 # PROXY_TYPE 可选：http / socks5，默认http
 # PLUSPLUS_TOKEN 可选：推送token
@@ -623,17 +631,17 @@ except ImportError:
     sys.exit(1)
 
 # ===================== 配置项 =====================
-# 从环境变量 YYB_GO 读取wxcode服务地址，多行换行分隔
+# 从环境变量 VX_GO 读取wxcode服务地址，多行换行分隔
 SERVERS = []
-env_yyb_go = os.getenv("YYB_GO", "")
+env_yyb_go = os.getenv("VX_GO", "")
 if env_yyb_go:
     raw_lines = re.split(r"\r?\n|&", env_yyb_go)
     SERVERS = [line.strip() for line in raw_lines if line.strip()]
 
 # 无有效地址直接退出
 if len(SERVERS) == 0:
-    print("❌ 错误：未读取到环境变量 YYB_GO 或无有效IP端口！")
-    print("青龙环境变量YYB_GO填写示例（每行一个地址）：")
+    print("❌ 错误：未读取到环境变量 VX_GO 或无有效IP端口！")
+    print("青龙环境变量VX_GO填写示例（每行一个地址）：")
     print("127.0.0.1:8088")
     print("192.168.1.21:8088")
     sys.exit(1)
@@ -725,21 +733,20 @@ def build_direct_transport() -> AsyncHTTPTransport:
     return AsyncHTTPTransport(verify=False)
 
 
-def parse_yyb_go_entry(raw_value: str) -> Tuple[str, str]:
+def parse_yyb_go_entry(raw_value: str) -> Tuple[str, str, str]:
     value = str(raw_value or "").strip()
     if not value:
-        return "", ""
-    at_index = value.rfind("@")
-    if at_index == -1:
-        return value, ""
-    server = value[:at_index].strip()
-    ref = value[at_index + 1 :].strip()
+        return "", "", ""
+    parts = re.split(r"[@#]", value, maxsplit=2)
+    server = parts[0].strip()
+    ref = parts[1].strip() if len(parts) > 1 else ""
+    auth = (parts[2].strip() if len(parts) > 2 else "") or os.environ.get("auth", "") or os.environ.get("AUTH", "")
     server = server.removeprefix("http://").removeprefix("https://").rstrip("/")
-    return server, ref
+    return server, ref, auth
 
 
 async def get_code_via_yyb(server_entry: str, appid: str) -> Optional[str]:
-    server, ref = parse_yyb_go_entry(server_entry)
+    server, ref, auth = parse_yyb_go_entry(server_entry)
     if not server:
         print(f"❌ [{server_entry}] 获取code失败 | 服务地址为空")
         return None
@@ -749,10 +756,11 @@ async def get_code_via_yyb(server_entry: str, appid: str) -> Optional[str]:
 
     url = f"http://{server}/wxapp/getCode"
     try:
+        _headers = {"Authorization": auth} if auth else None
         async with httpx.AsyncClient(
             timeout=20.0, verify=False, trust_env=False
         ) as client:
-            response = await client.post(url, json={"ref": ref, "app_id": appid})
+            response = await client.post(url, json={"ref": ref, "app_id": appid}, headers=_headers)
             res = response.json()
 
         code = ((res.get("data") or {}).get("result") or {}).get("code")
