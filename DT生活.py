@@ -823,7 +823,7 @@ def get_wx_code(code_url):
         _headers = {"Authorization": f"Bearer {auth}"} if auth else None
         res = requests.post(
             f"http://{server}/wx/code",
-            json={"ref": ref, "app_id": APP_ID},
+            json={"openid": ref, "appid": APP_ID, "data": {}},
             timeout=20,
             proxies={"http": None, "https": None},
             headers=_headers,

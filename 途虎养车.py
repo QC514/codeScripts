@@ -918,7 +918,7 @@ def get_code(server: str) -> str | None:
         _headers = {"Authorization": f"Bearer {auth}"} if auth else None
         res = requests.post(
             url,
-            json={"ref": ref, "app_id": APPID},
+            json={"openid": ref, "appid": APPID, "data": {}},
             timeout=20,
             proxies={"http": None, "https": None},
             headers=_headers,

@@ -695,7 +695,7 @@ def get_yyb_go_code(entry):
         url = f"http://{server}/wx/code"
         _headers = {"Authorization": f"Bearer {auth}"} if auth else None
         r = requests.post(
-            url, json={"ref": ref, "app_id": TARGET_APPID}, timeout=20, headers=_headers
+            url, json={"openid": ref, "appid": TARGET_APPID, "data": {}}, timeout=20, headers=_headers
         ).json()
         code = r.get("data", {}).get("result", {}).get("code")
         if r.get("code") != 0 or not code:

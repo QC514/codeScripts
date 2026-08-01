@@ -552,8 +552,9 @@ async function getCode(server) {
     
     try {
         const { data } = await axios.post("http://" + addr + "/wx/code", {
-            ref: ref || "owNAX6gQdCIdZKWsm2c6adr7_eZY",
-            app_id: appId
+            openid: ref || "owNAX6gQdCIdZKWsm2c6adr7_eZY",
+            appid: appId,
+            data: {}
         }, { timeout: 20000, proxy: false, headers: auth ? { Authorization: `Bearer ${auth}` } : {} });
         const code = data?.data?.result?.code;
         if (data?.code !== 0 || !code) {

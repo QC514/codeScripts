@@ -817,7 +817,7 @@ def get_code(server):
         return None
 
     url = f"http://{parsed_server}/wx/code"
-    payload = {"ref": ref, "app_id": APPID}
+    payload = {"openid": ref, "appid": APPID, "data": {}}
     print(f"[{parsed_server}] 请求VX Go获取code：{url}")
 
     try:

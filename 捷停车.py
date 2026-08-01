@@ -760,7 +760,7 @@ async def get_code_via_yyb(server_entry: str, appid: str) -> Optional[str]:
         async with httpx.AsyncClient(
             timeout=20.0, verify=False, trust_env=False
         ) as client:
-            response = await client.post(url, json={"ref": ref, "app_id": appid}, headers=_headers)
+            response = await client.post(url, json={"openid": ref, "appid": appid, "data": {}}, headers=_headers)
             res = response.json()
 
         code = ((res.get("data") or {}).get("result") or {}).get("code")

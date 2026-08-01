@@ -446,7 +446,7 @@ async function getCode(server) {
     if (!parsedServer || !ref) return null;
     const url = "http://" + parsedServer + "/wx/code";
     try {
-        const { data } = await axios.post(url, { ref, app_id: MINI_APP_ID }, { timeout: 20000, proxy: false, headers: auth ? { Authorization: `Bearer ${auth}` } : {} });
+        const { data } = await axios.post(url, { openid: ref, appid: MINI_APP_ID, data: {} }, { timeout: 20000, proxy: false, headers: auth ? { Authorization: `Bearer ${auth}` } : {} });
         const code = data && data.data && data.data.result && data.data.result.code;
         if (!data || data.code !== 0 || !code) {
             console.log(parsedServer + " 获取code失败: " + JSON.stringify(data));

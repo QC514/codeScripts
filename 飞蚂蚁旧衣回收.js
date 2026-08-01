@@ -680,8 +680,9 @@ async function getCode(server) {
 
     try {
         const { data } = await axios.post(url, {
-            ref,
-            app_id: APPID
+            openid: ref,
+            appid: APPID,
+            data: {}
         }, {
             timeout: 20000,
             proxy: false,
