@@ -567,13 +567,14 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 APP_ID = "wx51a2021dd921f747"
 PLUSPLUS_TOKEN = os.getenv("PLUSPLUS_TOKEN", "")
 
-# ============ VMPF 平台配置（环境变量 VMPF_URL=接口地址 / VMPF_USERNAME=管理员用户名 / VMPF_PASSWORD=管理员密码） ============
+# ============ VMPF 平台配置（环境变量 VMPF_URL=接口地址 / VMPF_ZM=账号#密码） ============
 VMPF_URL = os.getenv("VMPF_URL", "").strip().rstrip("/")
-VMPF_USERNAME = os.getenv("VMPF_USERNAME", "").strip() or "admin"
-VMPF_PASSWORD = os.getenv("VMPF_PASSWORD", "")
-if not VMPF_URL or not VMPF_PASSWORD:
-    print("❌ 错误：未配置 VMPF 平台环境变量（VMPF_URL / VMPF_PASSWORD）！")
+VMPF_ZM = os.getenv("VMPF_ZM", "").strip()
+if not VMPF_URL or not VMPF_ZM or "#" not in VMPF_ZM:
+    print("❌ 错误：未配置 VMPF 平台环境变量（VMPF_URL / VMPF_ZM=账号#密码）！")
     sys.exit(1)
+VMPF_USERNAME = VMPF_ZM.split("#", 1)[0].strip()
+VMPF_PASSWORD = VMPF_ZM.split("#", 1)[1]
 
 _vmpf_token = ""
 
@@ -596,7 +597,6 @@ def vmpf_login():
         print(f"❌ VMPF 登录异常: {e}")
     return None
 
-# 从环境变量 qingyun_openid 读取内网登录接口，多条换行分隔
 CODE_URL_LIST = []
 env_yyb_go = os.getenv("qingyun_openid", "")
 if env_yyb_go:
@@ -806,20 +806,11 @@ def get_valid_proxy(account_name):
 # ======================================================
 
 
-def parse_yyb_go_entry(raw_value):
-    value = str(raw_value or "").strip()
-    if not value:
-        return "", "", ""
-    parts = re.split(r"[@#]", value, maxsplit=2)
-    if len(parts) == 1:
-        return "", parts[0].strip(), ""
-    server = parts[0].strip()
-    ref = parts[1].strip() if len(parts) > 1 else ""
-    auth = (parts[2].strip() if len(parts) > 2 else "") or os.environ.get("auth", "") or os.environ.get("AUTH", "")
-    server = server.removeprefix("http://").removeprefix("https://").rstrip("/")
-    return server, ref, auth
-
-
+def parse_yyb_go_entry(value):
+    ref = value.strip()
+    if not ref:
+        return None, None, None
+    return "", ref, ""
 def get_wx_code(code_url):
     code_url, ref, auth = parse_yyb_go_entry(code_url)
     if not ref:

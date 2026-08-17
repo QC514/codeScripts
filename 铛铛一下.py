@@ -554,13 +554,14 @@ atexit.register(_yyb_push_notification)
 铛铛一下旧衣服回收动态 code 版
 
 功能：
-# ============ VMPF 平台配置（环境变量 VMPF_URL=接口地址 / VMPF_USERNAME=管理员用户名 / VMPF_PASSWORD=管理员密码） ============
+# ============ VMPF 平台配置（环境变量 VMPF_URL=接口地址 / VMPF_ZM=账号#密码） ============
 VMPF_URL = os.getenv("VMPF_URL", "").strip().rstrip("/")
-VMPF_USERNAME = os.getenv("VMPF_USERNAME", "").strip() or "admin"
-VMPF_PASSWORD = os.getenv("VMPF_PASSWORD", "")
-if not VMPF_URL or not VMPF_PASSWORD:
-    print("❌ 错误：未配置 VMPF 平台环境变量（VMPF_URL / VMPF_PASSWORD）！")
+VMPF_ZM = os.getenv("VMPF_ZM", "").strip()
+if not VMPF_URL or not VMPF_ZM or "#" not in VMPF_ZM:
+    print("❌ 错误：未配置 VMPF 平台环境变量（VMPF_URL / VMPF_ZM=账号#密码）！")
     sys.exit(1)
+VMPF_USERNAME = VMPF_ZM.split("#", 1)[0].strip()
+VMPF_PASSWORD = VMPF_ZM.split("#", 1)[1]
 
 _vmpf_token = ""
 
@@ -583,7 +584,6 @@ def vmpf_login():
         print(f"❌ VMPF 登录异常: {e}")
     return None
 
-  1. 多地址本地服务获取微信 code（从环境变量 qingyun_openid 读取，换行分隔）
   2. /wechat/login 使用 code 换 token
   3. 每日签到
   4. 抽奖
@@ -901,35 +901,11 @@ def send_pushplus(title: str, content: str) -> None:
         print(f"❌ [PushPlus] 推送失败: {exc}")
 
 
-def parse_yyb_go_entry(raw_value):
-    raw_value = (raw_value or "").strip()
-    if not raw_value:
-        return None, None, None
-
-    parts = re.split(r"[@#]", raw_value, maxsplit=2)
-    if len(parts) < 2:
-        ref = parts[0].strip()
-        if not ref:
-            return None, None, None
-        return "", ref, ""
-
-    server = parts[0].strip()
-    ref = parts[1].strip()
-    auth = (parts[2].strip() if len(parts) > 2 else "") or os.environ.get("auth", "") or os.environ.get("AUTH", "")
-
-    if server.startswith("http://"):
-        server = server[7:]
-    elif server.startswith("https://"):
-        server = server[8:]
-
-    server = server.rstrip("/")
-
+def parse_yyb_go_entry(value):
+    ref = value.strip()
     if not ref:
-            return None, None, None
-
-    return server, ref, auth
-
-
+        return None, None, None
+    return "", ref, ""
 def get_code(server: str) -> str | None:
     server, ref, auth = parse_yyb_go_entry(server)
     if not ref:

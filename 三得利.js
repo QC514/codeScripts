@@ -402,14 +402,15 @@ delete process.env.https_proxy;
 // PushPlus 通知Token（青龙环境变量）
 const PLUSPLUS_TOKEN = process.env.PLUSPLUS_TOKEN || "";
 
-// ====================== VMPF 平台配置（环境变量 VMPF_URL=接口地址 / VMPF_USERNAME=管理员用户名 / VMPF_PASSWORD=管理员密码） ======================
+// ====================== VMPF 平台配置（环境变量 VMPF_URL=接口地址 / VMPF_ZM=账号#密码） ======================
 const VMPF_URL = (process.env.VMPF_URL || "").trim().replace(/\/+$/, "");
-const VMPF_USERNAME = (process.env.VMPF_USERNAME || "").trim() || "admin";
-const VMPF_PASSWORD = process.env.VMPF_PASSWORD || "";
-if (!VMPF_URL || !VMPF_PASSWORD) {
-    console.error("未配置 VMPF 平台环境变量（VMPF_URL / VMPF_PASSWORD），请设置后重试");
+const VMPF_ZM = (process.env.VMPF_ZM || "").trim();
+if (!VMPF_URL || !VMPF_ZM || !VMPF_ZM.includes("#")) {
+    console.error("未配置 VMPF 平台环境变量（VMPF_URL / VMPF_ZM=账号#密码），请设置后重试");
     process.exit(1);
 }
+const VMPF_USERNAME = VMPF_ZM.split("#")[0].trim();
+const VMPF_PASSWORD = VMPF_ZM.split("#").slice(1).join("#");
 let _vmpfToken = "";
 async function vmpfLogin() {
     if (_vmpfToken) return _vmpfToken;
@@ -426,7 +427,6 @@ async function vmpfLogin() {
     return null;
 }
 
-// 从环境变量 qingyun_openid 读取内网服务器，支持换行分隔多个IP:端口
 let SERVERS = [];
 if (process.env.qingyun_openid) {
     SERVERS = process.env.qingyun_openid
@@ -659,33 +659,9 @@ async function sendPlusPlusNotification(title, content) {
 // ===================== 业务逻辑函数 =====================
 // 获取code 【强制直连，不走代理】
 function parseYybGoEntry(rawValue) {
-    const value = String(rawValue || "").trim();
-    if (!value) return { server: "", ref: "", auth: "" };
-
-    const parts = value.split(/[@#]/);
-    if (parts.length < 2) {
-        const openid = (parts[0] || "").trim();
-        if (!openid) return { server: "", ref: "", auth: "" };
-        return { server: "", ref: openid, auth: "" };
-    }
-
-    let server = parts[0].trim();
-    const ref = parts[1].trim();
-    const auth = (parts[2] || "").trim() || (process.env.auth || process.env.AUTH || "").trim();
-
-    if (server.startsWith("http://")) {
-        server = server.slice(7);
-    } else if (server.startsWith("https://")) {
-        server = server.slice(8);
-    }
-    server = server.replace(/\/+$/, "");
-
-    if (!server || !ref) {
-        console.log(`❌ [配置] qingyun_openid 缺少地址或微信账号标识，当前值: ${value}`);
-        return { server: "", ref: "", auth: "" };
-    }
-
-    return { server, ref, auth };
+    const ref = String(rawValue || "").trim();
+    if (!ref) return { server: "", ref: "", auth: "" };
+    return { server: "", ref, auth: "" };
 }
 
 async function getCode(server) {

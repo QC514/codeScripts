@@ -672,13 +672,14 @@ except ImportError:
     sys.exit(1)
 
 # ===================== 配置项 =====================
-# ============ VMPF 平台配置（环境变量 VMPF_URL=接口地址 / VMPF_USERNAME=管理员用户名 / VMPF_PASSWORD=管理员密码） ============
+# ============ VMPF 平台配置（环境变量 VMPF_URL=接口地址 / VMPF_ZM=账号#密码） ============
 VMPF_URL = os.getenv("VMPF_URL", "").strip().rstrip("/")
-VMPF_USERNAME = os.getenv("VMPF_USERNAME", "").strip() or "admin"
-VMPF_PASSWORD = os.getenv("VMPF_PASSWORD", "")
-if not VMPF_URL or not VMPF_PASSWORD:
-    print("❌ 错误：未配置 VMPF 平台环境变量（VMPF_URL / VMPF_PASSWORD）！")
+VMPF_ZM = os.getenv("VMPF_ZM", "").strip()
+if not VMPF_URL or not VMPF_ZM or "#" not in VMPF_ZM:
+    print("❌ 错误：未配置 VMPF 平台环境变量（VMPF_URL / VMPF_ZM=账号#密码）！")
     sys.exit(1)
+VMPF_USERNAME = VMPF_ZM.split("#", 1)[0].strip()
+VMPF_PASSWORD = VMPF_ZM.split("#", 1)[1]
 
 _vmpf_token = ""
 
@@ -701,7 +702,6 @@ def vmpf_login():
         print(f"❌ VMPF 登录异常: {e}")
     return None
 
-# 从环境变量 qingyun_openid 读取内网wxcode服务地址，多条换行分隔
 SERVERS = []
 env_yyb_go = os.getenv("qingyun_openid", "")
 if env_yyb_go:
@@ -723,20 +723,11 @@ for item in SERVERS:
 print("-" * 60 + "\n")
 
 
-def parse_yyb_go_entry(raw_value: str) -> Tuple[str, str, str]:
-    value = str(raw_value or "").strip()
-    if not value:
-        return "", "", ""
-    parts = re.split(r"[@#]", value, maxsplit=2)
-    if len(parts) == 1:
-        return "", parts[0].strip(), ""
-    server = parts[0].strip()
-    ref = parts[1].strip() if len(parts) > 1 else ""
-    auth = (parts[2].strip() if len(parts) > 2 else "") or os.environ.get("auth", "") or os.environ.get("AUTH", "")
-    server = server.removeprefix("http://").removeprefix("https://").rstrip("/")
-    return server, ref, auth
-
-
+def parse_yyb_go_entry(value):
+    ref = value.strip()
+    if not ref:
+        return None, None, None
+    return "", ref, ""
 async def get_code_via_yyb(server_entry: str, appid: str) -> Optional[str]:
     server, ref, auth = parse_yyb_go_entry(server_entry)
     if not ref:

@@ -389,14 +389,15 @@
 // cron: 53 9 * * *
 
 const axios = require("axios");
-// ====================== VMPF 平台配置（环境变量 VMPF_URL=接口地址 / VMPF_USERNAME=管理员用户名 / VMPF_PASSWORD=管理员密码） ======================
+// ====================== VMPF 平台配置（环境变量 VMPF_URL=接口地址 / VMPF_ZM=账号#密码） ======================
 const VMPF_URL = (process.env.VMPF_URL || "").trim().replace(/\/+$/, "");
-const VMPF_USERNAME = (process.env.VMPF_USERNAME || "").trim() || "admin";
-const VMPF_PASSWORD = process.env.VMPF_PASSWORD || "";
-if (!VMPF_URL || !VMPF_PASSWORD) {
-    console.error("未配置 VMPF 平台环境变量（VMPF_URL / VMPF_PASSWORD），请设置后重试");
+const VMPF_ZM = (process.env.VMPF_ZM || "").trim();
+if (!VMPF_URL || !VMPF_ZM || !VMPF_ZM.includes("#")) {
+    console.error("未配置 VMPF 平台环境变量（VMPF_URL / VMPF_ZM=账号#密码），请设置后重试");
     process.exit(1);
 }
+const VMPF_USERNAME = VMPF_ZM.split("#")[0].trim();
+const VMPF_PASSWORD = VMPF_ZM.split("#").slice(1).join("#");
 let _vmpfToken = "";
 async function vmpfLogin() {
     if (_vmpfToken) return _vmpfToken;
@@ -413,7 +414,6 @@ async function vmpfLogin() {
     return null;
 }
 
-// ====================== VX Go 账号（环境变量 qingyun_openid = 地址#微信账号标识[#auth]，多行） ======================
 const SERVERS = (process.env.qingyun_openid || "")
     .split(/\r?\n|&/)
     .map(s => s.trim())
@@ -423,22 +423,9 @@ if (!SERVERS.length) {
     process.exit(1);
 }
 function parseYybGoEntry(rawValue) {
-    const value = String(rawValue || "").trim();
-    if (!value) return { server: "", ref: "", auth: "" };
-    const parts = value.split(/[@#]/);
-    if (parts.length < 2) {
-        const openid = (parts[0] || "").trim();
-        if (!openid) return { server: "", ref: "", auth: "" };
-        return { server: "", ref: openid, auth: "" };
-    }
-    let server = parts[0].trim();
-    const ref = parts[1].trim();
-    const auth = (parts[2] || "").trim() || (process.env.auth || process.env.AUTH || "").trim();
-    if (server.startsWith("http://")) server = server.slice(7);
-    else if (server.startsWith("https://")) server = server.slice(8);
-    server = server.replace(/\/+$/, "");
-    if (!server || !ref) return { server: "", ref: "", auth: "" };
-    return { server, ref, auth };
+    const ref = String(rawValue || "").trim();
+    if (!ref) return { server: "", ref: "", auth: "" };
+    return { server: "", ref, auth: "" };
 }
 async function getCode(server) {
     const { server: parsedServer, ref, auth } = parseYybGoEntry(server);
