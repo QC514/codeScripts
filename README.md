@@ -42,21 +42,19 @@ ql repo https://github.com/QC514/codeScripts.git "" "" "" ""
 
 订阅完成后，请按各脚本头部说明配置环境变量和定时任务。建议将不同任务的执行时间错开，避免并发运行造成接口拥堵或触发频率限制。
 
-## VX_GO 环境变量
+## VMPF 平台环境变量
 
 | 变量名 | 格式 | 示例 |
 |--------|------|------|
-| `VX_GO` | `地址#openid[#auth]`，换行或 `&` 分隔 | `172.17.0.4:8000#XXXXXXXXXX#myauth` |
-| `auth` | 全局默认 auth（可选，账号未带 auth 时回退使用） | `myauth` |
+| `VMPF_URL` | VMPF 平台接口地址（不含路径） | `http://172.17.0.4:5679` |
+| `VMPF_USERNAME` | VMPF 管理员用户名（可选，默认 `admin`） | `admin` |
+| `VMPF_PASSWORD` | VMPF 管理员密码（必填） | `admin123456` |
+| `qingyun_openid` | 微信账号 openid 列表，换行或 `&` 分隔 | `oXXXXX...` |
 
 配置时请注意：
 
-- 地址不要带 `http://` 前缀。
-- 不要使用容器名（如 `vx-go`），请使用 IP 地址。
-- 单个账号内分隔符支持 `#` 和 `@`，格式为 `地址#openid#auth` 或 `地址#openid`。
-- 账号未带 auth 时，从全局 `auth` 环境变量读取。
-- 多个账号支持换行分隔，也支持用 `&` 连接写在同一行。
-- 所有发往 VX_GO 服务的请求会自动携带 `Authorization` 请求头。
+- `qingyun_openid` 每行一个 openid（纯 openid 即可，兼容旧 `地址#openid[#auth]` 格式）。
+- `VMPF_URL` 指向 VMPF 平台，脚本自动用管理员账密登录获取 token 后调用取码接口。
 - 脚本不会同时执行，青龙定时任务需要手动错开 cron。
 
 ## 通知配置

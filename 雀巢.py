@@ -1,4 +1,4 @@
-# === VX_GO 统一通知注入 begin ===
+# === qingyun_openid 统一通知注入 begin ===
 import atexit
 import importlib
 import json
@@ -16,7 +16,7 @@ _yyb_notification_sent = False
 _yyb_footer_printed = False
 _yyb_original_stdout = sys.stdout
 _yyb_original_stderr = sys.stderr
-_yyb_raw_servers = os.environ.get("VX_GO", "")
+_yyb_raw_servers = os.environ.get("qingyun_openid", "")
 _yyb_servers = [item.strip() for item in re.split(r"\r?\n|&", _yyb_raw_servers) if item.strip()]
 _yyb_seen_accounts = []
 _yyb_failed_accounts = set()
@@ -59,11 +59,11 @@ def _yyb_emit_box(lines, account=False):
 
 def _yyb_script_title():
     source_path = globals().get("__file__") or (sys.argv[0] if sys.argv else "")
-    fallback = os.path.splitext(os.path.basename(source_path))[0] or "VX_GO"
+    fallback = os.path.splitext(os.path.basename(source_path))[0] or "qingyun_openid"
     try:
         with open(source_path, encoding="utf-8") as script_file:
             source = script_file.read()
-        marker = "\n# === VX_GO 统一通知注入 end ==="
+        marker = "\n# === qingyun_openid 统一通知注入 end ==="
         source = source.split(marker, 1)[-1]
         name_match = re.search(r"(?m)^#\s*name:\s*(.+?)\s*$", source)
         doc_match = re.search(
@@ -143,28 +143,8 @@ def _yyb_load_display_names():
         separator = len(_parts) >= 2
         fallback = openid or server
         _yyb_display_names[server] = fallback
-        if not separator or not address or not openid:
+        if not openid:
             continue
-        if not address.startswith(("http://", "https://")):
-            address = f"http://{address}"
-        query = urllib.parse.urlencode({"openid": openid})
-        _headers = {"Accept": "application/json"}
-        if auth:
-            _headers["Authorization"] = f"Bearer {auth}"
-        request = urllib.request.Request(
-            f"{address}/accounts/profile?{query}",
-            headers=_headers,
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=8) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-            data = payload.get("data") if payload.get("code") == 0 else None
-            if isinstance(data, dict):
-                name = data.get("nickname") or data.get("alias") or fallback
-                name = re.sub(r"[\r\n]+", " ", str(name)).strip()
-                _yyb_display_names[server] = name or fallback
-        except Exception:
-            pass
 
 
 def _yyb_replace_server_names(line):
@@ -504,7 +484,7 @@ def _yyb_resolve_key():
 
 def _yyb_build_notification():
     _yyb_flush_captured_output()
-    title = os.path.basename(sys.argv[0]) if sys.argv else "VX_GO"
+    title = os.path.basename(sys.argv[0]) if sys.argv else "qingyun_openid"
     body = "\n".join(_yyb_logs[-_YYB_LOG_LIMIT:])
     return title, body or "任务执行完成，无日志输出。"
 
@@ -564,7 +544,7 @@ try:
 except (AttributeError, TypeError):
     pass
 atexit.register(_yyb_push_notification)
-# === VX_GO 统一通知注入 end ===
+# === qingyun_openid 统一通知注入 end ===
 
 # name: 雀巢
 # cron: 0 40 13 * * *
@@ -595,10 +575,10 @@ atexit.register(_yyb_push_notification)
 # │ PROXY_API     │ 可选     │ 品赞代理提取API链接                  │
 # │ PROXY_TYPE    │ 可选     │ 代理类型：http(默认) 或 socks5       │
 # │ PLUSPLUS_TOKEN│ 可选     │ PushPlus推送Token，用于接收任务结果  │
-# │ VX_GO         │ 必填     │ 内网wxcode服务地址，多个换行分隔     │
+# │ qingyun_openid         │ 必填     │ 内网wxcode服务地址，多个换行分隔     │
 # └───────────────┴──────────┴─────────────────────────────────────┘
 #
-# VX_GO示例值（多行换行）：
+# qingyun_openid示例值（多行换行）：
 # 127.0.0.1:8088
 # 192.168.1.21:8088
 # 10.30.9.49:8088
@@ -626,8 +606,8 @@ atexit.register(_yyb_push_notification)
 # 【五、常见问题排查】
 # 1. ❌ 获取code失败
 #    - 检查code服务是否正常运行
-#    - 确认VX_GO内服务器地址和端口是否正确
-#    - 测试配置格式：VX_GO=yyb-go:8000@你的openid
+#    - 确认qingyun_openid内服务器地址和端口是否正确
+#    - 测试配置格式：qingyun_openid=yyb-go:8000@你的openid
 #
 # 2. ❌ 获取token失败
 #    - 确认code未过期（有效期5分钟）
@@ -692,17 +672,46 @@ except ImportError:
     sys.exit(1)
 
 # ===================== 配置项 =====================
-# 从环境变量 VX_GO 读取内网wxcode服务地址，多条换行分隔
+# ============ VMPF 平台配置（环境变量 VMPF_URL=接口地址 / VMPF_USERNAME=管理员用户名 / VMPF_PASSWORD=管理员密码） ============
+VMPF_URL = os.getenv("VMPF_URL", "").strip().rstrip("/")
+VMPF_USERNAME = os.getenv("VMPF_USERNAME", "").strip() or "admin"
+VMPF_PASSWORD = os.getenv("VMPF_PASSWORD", "")
+if not VMPF_URL or not VMPF_PASSWORD:
+    print("❌ 错误：未配置 VMPF 平台环境变量（VMPF_URL / VMPF_PASSWORD）！")
+    sys.exit(1)
+
+_vmpf_token = ""
+
+
+def vmpf_login():
+    global _vmpf_token
+    if _vmpf_token:
+        return _vmpf_token
+    try:
+        r = httpx.post(
+            f"{VMPF_URL}/api/auth/login",
+            json={"username": VMPF_USERNAME, "password": VMPF_PASSWORD},
+            timeout=15,
+        ).json()
+        if r.get("Code") == 0 and r.get("Data", {}).get("token"):
+            _vmpf_token = r["Data"]["token"]
+            return _vmpf_token
+        print(f"❌ VMPF 登录失败: {str(r)[:200]}")
+    except Exception as e:
+        print(f"❌ VMPF 登录异常: {e}")
+    return None
+
+# 从环境变量 qingyun_openid 读取内网wxcode服务地址，多条换行分隔
 SERVERS = []
-env_yyb_go = os.getenv("VX_GO", "")
+env_yyb_go = os.getenv("qingyun_openid", "")
 if env_yyb_go:
     raw_lines = re.split(r"\r?\n|&", env_yyb_go)
     SERVERS = [line.strip() for line in raw_lines if line.strip()]
 
 # 无有效地址直接退出并提示
 if len(SERVERS) == 0:
-    print("❌ 错误：未读取到环境变量 VX_GO 或无有效服务地址！")
-    print("配置示例（青龙环境变量VX_GO值，每行一个地址）：")
+    print("❌ 错误：未读取到环境变量 qingyun_openid 或无有效服务地址！")
+    print("配置示例（青龙环境变量qingyun_openid值，每行一个地址）：")
     print("127.0.0.1:8088")
     print("192.168.1.21:8088")
     print("10.30.9.49:8088")
@@ -719,6 +728,8 @@ def parse_yyb_go_entry(raw_value: str) -> Tuple[str, str, str]:
     if not value:
         return "", "", ""
     parts = re.split(r"[@#]", value, maxsplit=2)
+    if len(parts) == 1:
+        return "", parts[0].strip(), ""
     server = parts[0].strip()
     ref = parts[1].strip() if len(parts) > 1 else ""
     auth = (parts[2].strip() if len(parts) > 2 else "") or os.environ.get("auth", "") or os.environ.get("AUTH", "")
@@ -728,26 +739,30 @@ def parse_yyb_go_entry(raw_value: str) -> Tuple[str, str, str]:
 
 async def get_code_via_yyb(server_entry: str, appid: str) -> Optional[str]:
     server, ref, auth = parse_yyb_go_entry(server_entry)
-    if not server:
-        print(f"❌ [{server_entry}] 获取code失败 | 服务地址为空")
-        return None
     if not ref:
         print(f"❌ [{server_entry}] 获取code失败 | 缺少openid/ref")
         return None
 
-    url = f"http://{server}/wx/code"
+    token = vmpf_login()
+    if not token:
+        return None
+
+    url = f"{VMPF_URL}/api/wxapp/JSLogin"
     try:
-        _headers = {"Authorization": f"Bearer {auth}"} if auth else None
-        async with httpx.AsyncClient(timeout=20.0, trust_env=False) as client:
-            response = await client.post(url, json={"openid": ref, "appid": appid, "data": {}}, headers=_headers)
+        async with httpx.AsyncClient(timeout=20.0, verify=False, trust_env=False) as client:
+            response = await client.post(
+                url,
+                json={"Appid": appid, "Wxid": ref},
+                headers={"Authorization": f"Bearer {token}"},
+            )
             res = response.json()
 
-        code = (res.get("data") or {}).get("code")
-        if res.get("code") != 0 or not code:
+        code = (res.get("Data") or {}).get("code")
+        if res.get("Code") != 0 or not code:
             print(f"❌ [{server_entry}] 获取code失败 | 返回异常: {str(res)[:200]}")
             return None
 
-        print(f"✅ [{server}] 获取code成功")
+        print(f"✅ [{ref}] 获取code成功")
         return code
     except json.JSONDecodeError:
         print(f"❌ [{server_entry}] 获取code失败 | 响应不是JSON格式")
@@ -755,8 +770,6 @@ async def get_code_via_yyb(server_entry: str, appid: str) -> Optional[str]:
     except Exception as e:
         print(f"❌ [{server_entry}] 获取code异常 | 原因: {str(e)}")
         return None
-
-
 PLUSPLUS_TOKEN = os.getenv("PLUSPLUS_TOKEN", "")
 
 # 品赞代理配置（环境变量，可选）

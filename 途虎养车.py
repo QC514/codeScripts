@@ -1,4 +1,4 @@
-# === VX_GO 统一通知注入 begin ===
+# === qingyun_openid 统一通知注入 begin ===
 import atexit
 import importlib
 import json
@@ -16,7 +16,7 @@ _yyb_notification_sent = False
 _yyb_footer_printed = False
 _yyb_original_stdout = sys.stdout
 _yyb_original_stderr = sys.stderr
-_yyb_raw_servers = os.environ.get("VX_GO", "")
+_yyb_raw_servers = os.environ.get("qingyun_openid", "")
 _yyb_servers = [item.strip() for item in re.split(r"\r?\n|&", _yyb_raw_servers) if item.strip()]
 _yyb_seen_accounts = []
 _yyb_failed_accounts = set()
@@ -59,11 +59,11 @@ def _yyb_emit_box(lines, account=False):
 
 def _yyb_script_title():
     source_path = globals().get("__file__") or (sys.argv[0] if sys.argv else "")
-    fallback = os.path.splitext(os.path.basename(source_path))[0] or "VX_GO"
+    fallback = os.path.splitext(os.path.basename(source_path))[0] or "qingyun_openid"
     try:
         with open(source_path, encoding="utf-8") as script_file:
             source = script_file.read()
-        marker = "\n# === VX_GO 统一通知注入 end ==="
+        marker = "\n# === qingyun_openid 统一通知注入 end ==="
         source = source.split(marker, 1)[-1]
         name_match = re.search(r"(?m)^#\s*name:\s*(.+?)\s*$", source)
         doc_match = re.search(
@@ -143,28 +143,8 @@ def _yyb_load_display_names():
         separator = len(_parts) >= 2
         fallback = openid or server
         _yyb_display_names[server] = fallback
-        if not separator or not address or not openid:
+        if not openid:
             continue
-        if not address.startswith(("http://", "https://")):
-            address = f"http://{address}"
-        query = urllib.parse.urlencode({"openid": openid})
-        _headers = {"Accept": "application/json"}
-        if auth:
-            _headers["Authorization"] = f"Bearer {auth}"
-        request = urllib.request.Request(
-            f"{address}/accounts/profile?{query}",
-            headers=_headers,
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=8) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-            data = payload.get("data") if payload.get("code") == 0 else None
-            if isinstance(data, dict):
-                name = data.get("nickname") or data.get("alias") or fallback
-                name = re.sub(r"[\r\n]+", " ", str(name)).strip()
-                _yyb_display_names[server] = name or fallback
-        except Exception:
-            pass
 
 
 def _yyb_replace_server_names(line):
@@ -504,7 +484,7 @@ def _yyb_resolve_key():
 
 def _yyb_build_notification():
     _yyb_flush_captured_output()
-    title = os.path.basename(sys.argv[0]) if sys.argv else "VX_GO"
+    title = os.path.basename(sys.argv[0]) if sys.argv else "qingyun_openid"
     body = "\n".join(_yyb_logs[-_YYB_LOG_LIMIT:])
     return title, body or "任务执行完成，无日志输出。"
 
@@ -564,7 +544,7 @@ try:
 except (AttributeError, TypeError):
     pass
 atexit.register(_yyb_push_notification)
-# === VX_GO 统一通知注入 end ===
+# === qingyun_openid 统一通知注入 end ===
 
 # name: 途虎养车
 # cron: 0 40 12 * * *
@@ -586,7 +566,7 @@ atexit.register(_yyb_push_notification)
   PLUSPLUS_TOKEN    PushPlus token，可选
   PROXY_API         品赞代理提取 API，可选
   PROXY_TYPE        http / socks5，默认 http
-  VX_GO             内网wxcode服务地址，多个换行分隔，格式：192.168.1.21:8088
+  qingyun_openid             内网wxcode服务地址，多个换行分隔，格式：192.168.1.21:8088
 
 依赖：
   pip install requests
@@ -608,16 +588,45 @@ import requests
 APP_NAME = "途虎养车小程序"
 APPID = "wx27d20205249c56a3"
 
-# 从环境变量 VX_GO 读取内网服务，多条换行分隔
+# ============ VMPF 平台配置（环境变量 VMPF_URL=接口地址 / VMPF_USERNAME=管理员用户名 / VMPF_PASSWORD=管理员密码） ============
+VMPF_URL = os.getenv("VMPF_URL", "").strip().rstrip("/")
+VMPF_USERNAME = os.getenv("VMPF_USERNAME", "").strip() or "admin"
+VMPF_PASSWORD = os.getenv("VMPF_PASSWORD", "")
+if not VMPF_URL or not VMPF_PASSWORD:
+    print("❌ 错误：未配置 VMPF 平台环境变量（VMPF_URL / VMPF_PASSWORD）！")
+    sys.exit(1)
+
+_vmpf_token = ""
+
+
+def vmpf_login():
+    global _vmpf_token
+    if _vmpf_token:
+        return _vmpf_token
+    try:
+        r = requests.post(
+            f"{VMPF_URL}/api/auth/login",
+            json={"username": VMPF_USERNAME, "password": VMPF_PASSWORD},
+            timeout=15,
+        ).json()
+        if r.get("Code") == 0 and r.get("Data", {}).get("token"):
+            _vmpf_token = r["Data"]["token"]
+            return _vmpf_token
+        print(f"❌ VMPF 登录失败: {str(r)[:200]}")
+    except Exception as e:
+        print(f"❌ VMPF 登录异常: {e}")
+    return None
+
+# 从环境变量 qingyun_openid 读取内网服务，多条换行分隔
 SERVERS = []
-env_yyb_go = os.getenv("VX_GO", "")
+env_yyb_go = os.getenv("qingyun_openid", "")
 if env_yyb_go:
     raw_lines = re.split(r"\r?\n|&", env_yyb_go)
     SERVERS = [line.strip() for line in raw_lines if line.strip()]
 
 # 无有效地址直接退出并提示
 if len(SERVERS) == 0:
-    print("❌ 错误：未读取到环境变量 VX_GO 或无有效IP端口！")
+    print("❌ 错误：未读取到环境变量 qingyun_openid 或无有效IP端口！")
     print("配置示例（青龙环境变量值，每行一个）：")
     print("127.0.0.1:8088")
     print("192.168.1.21:8088")
@@ -885,8 +894,10 @@ def parse_yyb_go_entry(raw_value):
 
     parts = re.split(r"[@#]", raw_value, maxsplit=2)
     if len(parts) < 2:
-        print(f"❌ 配置错误：VX_GO 格式应为 地址#微信账号标识[#auth]，当前值：{raw_value}")
-        return None, None, None
+        ref = parts[0].strip()
+        if not ref:
+            return None, None, None
+        return "", ref, ""
 
     server = parts[0].strip()
     ref = parts[1].strip()
@@ -899,44 +910,43 @@ def parse_yyb_go_entry(raw_value):
 
     server = server.rstrip("/")
 
-    if not server or not ref:
-        print(f"❌ 配置错误：VX_GO 缺少地址或微信账号标识，当前值：{raw_value}")
-        return None, None, None
+    if not ref:
+            return None, None, None
 
     return server, ref, auth
 
 
 def get_code(server: str) -> str | None:
-    parsed_server, ref, auth = parse_yyb_go_entry(server)
-    if not parsed_server or not ref:
+    server, ref, auth = parse_yyb_go_entry(server)
+    if not ref:
         return None
 
-    url = f"http://{parsed_server}/wx/code"
-    print(f"[{parsed_server}] 请求VX Go获取code：{url}")
+    token = vmpf_login()
+    if not token:
+        return None
+
+    url = f"{VMPF_URL}/api/wxapp/JSLogin"
+    print(f"请求VMPF获取code：{url}")
 
     try:
-        _headers = {"Authorization": f"Bearer {auth}"} if auth else None
         res = requests.post(
             url,
-            json={"openid": ref, "appid": APPID, "data": {}},
+            json={"Appid": APPID, "Wxid": ref},
             timeout=20,
             proxies={"http": None, "https": None},
-            headers=_headers,
+            headers={"Authorization": f"Bearer {token}"},
         )
         data = res.json()
-        code = (data.get("data") or {}).get("code")
-
-        if data.get("code") != 0 or not code:
-            print(f"[{parsed_server}] 获取code失败：{data}")
+        code = (data.get("Data") or {}).get("code")
+        if data.get("Code") != 0 or not code:
+            print(f"获取code失败：{data}")
             return None
 
-        print(f"[{parsed_server}] 获取code成功")
+        print("获取code成功")
         return code
     except Exception as exc:
-        print(f"[{parsed_server}] 获取code异常：{exc}")
+        print(f"获取code异常：{exc}")
         return None
-
-
 def common_headers(user_session: str | None = None) -> Dict[str, str]:
     headers = {
         "Host": "cl-gateway.tuhu.cn",

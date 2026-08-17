@@ -7,8 +7,8 @@
 功能:
   1. 自动调用 wolf-order/createContribution 赚取积分 (250积分/次)
   2. 每天运行前自动检测 uniIdToken(JWT) 有效期
-  3. 即将过期/已过期时, 通过 VX_GO 取码服务自动续期:
-       VX_GO /wx/code -> 微信登录 code
+  3. 即将过期/已过期时, 通过 qingyun_openid 取码服务自动续期:
+       qingyun_openid -> VMPF 平台取码 -> 微信登录 code
        -> uni-id-co loginByWeixin -> 新 uniIdToken
   4. 续期后的新 token 写入本地缓存, 并可写回青龙环境变量
 
@@ -18,14 +18,14 @@
 ------------------------------------------------------------
 环境变量 (青龙面板添加):
   必需:
-    VX_GO                - VX_GO 取码服务 (格式 地址#微信账号标识[#auth],
+    qingyun_openid                - qingyun_openid 取码服务 (格式 地址#微信账号标识[#auth],
                             可多行=多账号; 每个微信独立取码并自动续期 token)
   可选:
     WOLF_UID              - 你自己的用户ID [多账号可留空! 脚本登录后会自动
                             从响应提取每个账号的 uid]
     WOLF_UNI_ID_TOKEN     - uniIdToken(JWT) [首次运行填一个即可; 之后脚本
                             自动续期, 可留空]
-    WOLF_VX_GO_ENTRY     - 指定只跑 VX_GO 中某一行账号 (填完整行, 如
+    WOLF_QINGYUN_OPENID_ENTRY     - 指定只跑 qingyun_openid 中某一行账号 (填完整行, 如
                             172.17.0.4:8000@xxx); 不填则遍历所有行
     WOLF_MAX_RUNS         - 每次运行最大调用次数 (默认 20)
     WOLF_QYWX_KEY         - 企业微信Webhook Key (运行结果通知, 可选)
@@ -45,7 +45,7 @@
     下次运行优先使用各账号缓存中最新且有效的 token
 """
 
-# === VX_GO 统一通知注入 begin ===
+# === qingyun_openid 统一通知注入 begin ===
 import atexit
 import importlib
 import json
@@ -63,7 +63,7 @@ _yyb_notification_sent = False
 _yyb_footer_printed = False
 _yyb_original_stdout = sys.stdout
 _yyb_original_stderr = sys.stderr
-_yyb_raw_servers = os.environ.get("VX_GO", "")
+_yyb_raw_servers = os.environ.get("qingyun_openid", "")
 _yyb_servers = [item.strip() for item in re.split(r"\r?\n|&", _yyb_raw_servers) if item.strip()]
 _yyb_seen_accounts = []
 _yyb_failed_accounts = set()
@@ -106,11 +106,11 @@ def _yyb_emit_box(lines, account=False):
 
 def _yyb_script_title():
     source_path = globals().get("__file__") or (sys.argv[0] if sys.argv else "")
-    fallback = os.path.splitext(os.path.basename(source_path))[0] or "VX_GO"
+    fallback = os.path.splitext(os.path.basename(source_path))[0] or "qingyun_openid"
     try:
         with open(source_path, encoding="utf-8") as script_file:
             source = script_file.read()
-        marker = "\n# === VX_GO 统一通知注入 end ==="
+        marker = "\n# === qingyun_openid 统一通知注入 end ==="
         source = source.split(marker, 1)[-1]
         name_match = re.search(r"(?m)^#\s*name:\s*(.+?)\s*$", source)
         doc_match = re.search(
@@ -190,28 +190,8 @@ def _yyb_load_display_names():
         separator = len(_parts) >= 2
         fallback = openid or server
         _yyb_display_names[server] = fallback
-        if not separator or not address or not openid:
+        if not openid:
             continue
-        if not address.startswith(("http://", "https://")):
-            address = f"http://{address}"
-        query = urllib.parse.urlencode({"openid": openid})
-        _headers = {"Accept": "application/json"}
-        if auth:
-            _headers["Authorization"] = f"Bearer {auth}"
-        request = urllib.request.Request(
-            f"{address}/accounts/profile?{query}",
-            headers=_headers,
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=8) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-            data = payload.get("data") if payload.get("code") == 0 else None
-            if isinstance(data, dict):
-                name = data.get("nickname") or data.get("alias") or fallback
-                name = re.sub(r"[\r\n]+", " ", str(name)).strip()
-                _yyb_display_names[server] = name or fallback
-        except Exception:
-            pass
 
 
 def _yyb_replace_server_names(line):
@@ -551,7 +531,7 @@ def _yyb_resolve_key():
 
 def _yyb_build_notification():
     _yyb_flush_captured_output()
-    title = os.path.basename(sys.argv[0]) if sys.argv else "VX_GO"
+    title = os.path.basename(sys.argv[0]) if sys.argv else "qingyun_openid"
     body = "\n".join(_yyb_logs[-_YYB_LOG_LIMIT:])
     return title, body or "任务执行完成，无日志输出。"
 
@@ -611,7 +591,7 @@ try:
 except (AttributeError, TypeError):
     pass
 atexit.register(_yyb_push_notification)
-# === VX_GO 统一通知注入 end ===
+# === qingyun_openid 统一通知注入 end ===
 
 import base64
 import hashlib
@@ -658,8 +638,37 @@ TOKEN_CACHE_DIR = os.path.join(
 CACHE_PATH = os.path.join(TOKEN_CACHE_DIR, "wolf_token_cache.json")
 
 
-# ============ VX_GO 取码服务 (地址#微信账号标识[#auth] 多行) ============
-VX_GO_RAW = os.environ.get("VX_GO", "")
+# ============ VMPF 平台配置（环境变量 VMPF_URL=接口地址 / VMPF_USERNAME=管理员用户名 / VMPF_PASSWORD=管理员密码） ============
+VMPF_URL = os.getenv("VMPF_URL", "").strip().rstrip("/")
+VMPF_USERNAME = os.getenv("VMPF_USERNAME", "").strip() or "admin"
+VMPF_PASSWORD = os.getenv("VMPF_PASSWORD", "")
+if not VMPF_URL or not VMPF_PASSWORD:
+    print("❌ 错误：未配置 VMPF 平台环境变量（VMPF_URL / VMPF_PASSWORD）！")
+    sys.exit(1)
+
+_vmpf_token = ""
+
+
+def vmpf_login():
+    global _vmpf_token
+    if _vmpf_token:
+        return _vmpf_token
+    try:
+        r = requests.post(
+            f"{VMPF_URL}/api/auth/login",
+            json={"username": VMPF_USERNAME, "password": VMPF_PASSWORD},
+            timeout=15,
+        ).json()
+        if r.get("Code") == 0 and r.get("Data", {}).get("token"):
+            _vmpf_token = r["Data"]["token"]
+            return _vmpf_token
+        print(f"❌ VMPF 登录失败: {str(r)[:200]}")
+    except Exception as e:
+        print(f"❌ VMPF 登录异常: {e}")
+    return None
+
+# ============ qingyun_openid 取码服务 (地址#微信账号标识[#auth] 多行) ============
+qingyun_openid_RAW = os.environ.get("qingyun_openid", "")
 
 
 def parse_yyb_go_entry(raw):
@@ -668,8 +677,10 @@ def parse_yyb_go_entry(raw):
         return None, None, None
     parts = re.split(r"[@#]", value, maxsplit=2)
     if len(parts) < 2:
-        print(f"  [VX_GO] 格式应为 地址#微信账号标识[#auth], 当前值: {value}")
-        return None, None, None
+        ref = parts[0].strip()
+        if not ref:
+            return None, None, None
+        return "", ref, ""
     server = parts[0].strip()
     ref = parts[1].strip()
     auth = (parts[2].strip() if len(parts) > 2 else "") or os.environ.get("auth", "") or os.environ.get("AUTH", "")
@@ -678,39 +689,38 @@ def parse_yyb_go_entry(raw):
     elif server.startswith("https://"):
         server = server[8:]
     server = server.rstrip("/")
-    if not server or not ref:
-        return None, None, None
+    if not ref:
+            return None, None, None
     return server, ref, auth
 
 
 def get_yyb_go_code(entry):
-    """通过 VX_GO 服务获取指定账号的微信登录 code (entry 格式: 地址#微信账号标识[#auth])"""
     if not entry:
         return None
     server, ref, auth = parse_yyb_go_entry(entry)
-    if not server or not ref:
-        print(f"  [VX_GO] 无效 entry: {entry}")
+    if not ref:
+        print(f"  [VMPF] 无效 entry: {entry}")
         return None
     try:
-        url = f"http://{server}/wx/code"
-        _headers = {"Authorization": f"Bearer {auth}"} if auth else None
-        r = requests.post(
-            url, json={"openid": ref, "appid": TARGET_APPID, "data": {}}, timeout=20, headers=_headers
-        ).json()
-        code = r.get("data", {}).get("code")
-        if r.get("code") != 0 or not code:
-            print(
-                f"  [VX_GO] 取码失败 ({ref}): "
-                f"{json.dumps(r, ensure_ascii=False)[:200]}"
-            )
+        token = vmpf_login()
+        if not token:
             return None
-        print(f"  [VX_GO] 取码成功 ({server})")
+        url = f"{VMPF_URL}/api/wxapp/JSLogin"
+        r = requests.post(
+            url,
+            json={"Appid": TARGET_APPID, "Wxid": ref},
+            timeout=20,
+            headers={"Authorization": f"Bearer {token}"},
+        ).json()
+        code = r.get("Data", {}).get("code")
+        if r.get("Code") != 0 or not code:
+            print(f"  [VMPF] 取码失败 ({ref}): {json.dumps(r, ensure_ascii=False)[:200]}")
+            return None
+        print(f"  [VMPF] 取码成功 ({ref})")
         return code
     except Exception as e:
-        print(f"  [VX_GO] 取码异常: {e}")
+        print(f"  [VMPF] 取码异常: {e}")
         return None
-
-
 # ============ 签名算法 (HMAC-MD5, 已验证通过) ============
 def generate_sign(body_data):
     sorted_keys = sorted(body_data.keys())
@@ -894,16 +904,16 @@ def save_cache(token, path=None):
 
 
 def fetch_wx_code(entry):
-    """获取微信登录 code (仅通过 VX_GO 取码服务)"""
+    """获取微信登录 code (仅通过 qingyun_openid 取码服务)"""
     return get_yyb_go_code(entry)
 
 
 def renew_token(entry):
-    """完整续期: VX_GO取码 -> uni-id-co loginByWeixin -> 新 uniIdToken"""
+    """完整续期: qingyun_openid取码 -> uni-id-co loginByWeixin -> 新 uniIdToken"""
     if not entry:
-        print("  [续期] 缺少 VX_GO 账号配置 (entry 为空)")
+        print("  [续期] 缺少 qingyun_openid 账号配置 (entry 为空)")
         return None
-    print("  [续期] 步骤1: 从 VX_GO 获取微信登录 code ...")
+    print("  [续期] 步骤1: 从 qingyun_openid 获取微信登录 code ...")
     code = fetch_wx_code(entry)
     if not code:
         return None
@@ -1122,13 +1132,13 @@ def extract_uid():
     return None
 
 
-# 注: 通知已统一由文件顶部「VX_GO 统一通知注入」块在退出时收集完整日志并推送,
+# 注: 通知已统一由文件顶部「qingyun_openid 统一通知注入」块在退出时收集完整日志并推送,
 #     任何退出路径 (成功/失败/零成功/异常) 都会发送, 无需此处单独 send_notify。
 
 
 # ============ 主流程 ============
 def run_account(entry, allow_env=True):
-    """为单个 VX_GO 账号执行完整流程, 返回汇总 dict"""
+    """为单个 qingyun_openid 账号执行完整流程, 返回汇总 dict"""
     server, ref, _ = parse_yyb_go_entry(entry)
     if not server or not ref:
         print(f"\n  [账号] 跳过无效 entry: {entry}")
@@ -1255,30 +1265,30 @@ def main():
     print("  宝妈上班 自动赚取贡献值 (多账号版, 含自动续期)")
     print("=" * 50)
 
-    if not VX_GO_RAW:
-        print("  缺少 VX_GO 配置, 退出")
+    if not qingyun_openid_RAW:
+        print("  缺少 qingyun_openid 配置, 退出")
         sys.exit(1)
 
-    entries = [e for e in re.split(r"\r?\n|&", VX_GO_RAW) if e.strip()]
+    entries = [e for e in re.split(r"\r?\n|&", qingyun_openid_RAW) if e.strip()]
     if not entries:
-        print("  VX_GO 为空, 退出")
+        print("  qingyun_openid 为空, 退出")
         sys.exit(1)
 
-    # 兼容: 指定 WOLF_VX_GO_ENTRY 则只跑该行 (便于单独调试某个账号)
-    sel = os.environ.get("WOLF_VX_GO_ENTRY", "").strip()
+    # 兼容: 指定 WOLF_QINGYUN_OPENID_ENTRY 则只跑该行 (便于单独调试某个账号)
+    sel = os.environ.get("WOLF_QINGYUN_OPENID_ENTRY", "").strip()
     if sel:
         entries = [sel]
-        print(f"  (已指定 WOLF_VX_GO_ENTRY, 仅运行: {sel})")
+        print(f"  (已指定 WOLF_QINGYUN_OPENID_ENTRY, 仅运行: {sel})")
     print(f"  共 {len(entries)} 个账号待运行\n")
 
     # 多账号模式必须禁用 env token 共享: 否则第2/3...个账号会复用 WOLF_UNI_ID_TOKEN
     # (第一个账号的身份), 导致所有账号都在操作同一个 uid。多账号下每个账号只用自己
-    # 通过 VX_GO 取码续期得到的隔离缓存 token。
+    # 通过 qingyun_openid 取码续期得到的隔离缓存 token。
     allow_env = len(entries) == 1
     if not allow_env and UNI_ID_TOKEN.strip():
         print(
             "  [多账号] 已禁用 WOLF_UNI_ID_TOKEN 共享, "
-            "每个账号将各自通过 VX_GO 取码续期\n"
+            "每个账号将各自通过 qingyun_openid 取码续期\n"
         )
 
     results = []
@@ -1308,13 +1318,13 @@ def main():
         dup = [u for u in set(uids) if uids.count(u) > 1]
         print(
             f"\n  ⚠️ 检测到重复 uid {dup}: 仍有账号在共用同一身份 token, "
-            "请检查对应微信是否已在 VX_GO 登录授权!"
+            "请检查对应微信是否已在 qingyun_openid 登录授权!"
         )
 
     # 单账号模式下, 若续期成功则写回青龙环境变量 (多账号不写回, 避免覆盖)
     if len(results) == 1 and results[0].get("src") == "renewed":
         update_qinglong_env("WOLF_UNI_ID_TOKEN", UNI_ID_TOKEN)
-    # 通知由顶部「VX_GO 统一通知注入」块在退出时统一推送
+    # 通知由顶部「qingyun_openid 统一通知注入」块在退出时统一推送
 
 
 if __name__ == "__main__":

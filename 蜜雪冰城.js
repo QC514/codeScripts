@@ -1,4 +1,4 @@
-// === VX_GO 统一通知注入 begin ===
+// === qingyun_openid 统一通知注入 begin ===
 (function installYybOutputStyle() {
   const stateKey = Symbol.for("yyb.output.style");
   if (globalThis[stateKey]) return;
@@ -23,7 +23,7 @@
     log: console.log.bind(console),
     warn: console.warn.bind(console),
   };
-  const servers = (process.env.VX_GO || "")
+  const servers = (process.env.qingyun_openid || "")
     .split(/\r?\n|&/)
     .map((item) => item.trim())
     .filter(Boolean);
@@ -70,7 +70,7 @@
   }
 
   function scriptTitle() {
-    const fallback = path.basename(process.argv[1] || "VX_GO", ".js");
+    const fallback = path.basename(process.argv[1] || "qingyun_openid", ".js");
     try {
       const source = fs.readFileSync(process.argv[1], "utf8");
       const match = source.match(/^\/\/\s*name:\s*(.+?)\s*$/m);
@@ -125,31 +125,7 @@
       const auth = (parts[2] || "").trim() || (process.env.auth || process.env.AUTH || "").trim();
       const fallback = openid || server;
       displayNames.set(server, fallback);
-      if (!address || !openid) continue;
-      if (!/^https?:\/\//i.test(address)) address = `http://${address}`;
-      try {
-        const curlArgs = [
-            "--silent",
-            "--show-error",
-            "--max-time",
-            "8",
-            "--get",
-            "--data-urlencode",
-            `openid=${openid}`,
-          ];
-        if (auth) curlArgs.push("--header", `Authorization: Bearer ${auth}`);
-        curlArgs.push(`${address}/accounts/profile`);
-        const response = childProcess.spawnSync(
-          "curl",
-          curlArgs,
-          { encoding: "utf8", windowsHide: true },
-        );
-        if (response.status !== 0 || !response.stdout) continue;
-        const payload = JSON.parse(response.stdout);
-        const profile = payload && payload.code === 0 ? payload.data : null;
-        const name = profile && (profile.nickname || profile.alias);
-        if (name) displayNames.set(server, String(name).replace(/[\r\n]+/g, " ").trim() || fallback);
-      } catch (_) {}
+      if (!openid) continue;
     }
   }
 
@@ -385,7 +361,7 @@
     if (state.flushed) return;
     state.flushed = true;
     emitFooter();
-    const title = path.basename(process.argv[1] || "VX_GO");
+    const title = path.basename(process.argv[1] || "qingyun_openid");
     const body = state.logs.slice(-40).join("\n") || "任务执行完成，无日志输出。";
     if (trySendNotify(title, body)) return;
     const key = resolveKey();
@@ -407,7 +383,7 @@
     flushNotification();
   });
 })();
-// === VX_GO 统一通知注入 end ===
+// === qingyun_openid 统一通知注入 end ===
 
 // name: 蜜雪冰城
 // cron: 0 0 12 * * *
@@ -418,9 +394,51 @@ const rs = require("jsrsasign");
 // PushPlus 通知Token（在青龙面板环境变量中设置 PLUSPLUS_TOKEN）
 const PLUSPLUS_TOKEN = process.env.PLUSPLUS_TOKEN || "";
 
-// 从环境变量 VX_GO 读取内网wxcode服务，多条换行分隔
+// ====================== VMPF 平台配置（环境变量 VMPF_URL=接口地址 / VMPF_USERNAME=管理员用户名 / VMPF_PASSWORD=管理员密码） ======================
+const VMPF_URL = (process.env.VMPF_URL || "").trim().replace(/\/+$/, "");
+const VMPF_USERNAME = (process.env.VMPF_USERNAME || "").trim() || "admin";
+const VMPF_PASSWORD = process.env.VMPF_PASSWORD || "";
+if (!VMPF_URL || !VMPF_PASSWORD) {
+    console.error("未配置 VMPF 平台环境变量（VMPF_URL / VMPF_PASSWORD），请设置后重试");
+    process.exit(1);
+}
+let _vmpfToken = "";
+async function vmpfLogin() {
+    if (_vmpfToken) return _vmpfToken;
+    try {
+        const { data } = await axios.post(VMPF_URL + "/api/auth/login", { username: VMPF_USERNAME, password: VMPF_PASSWORD }, { timeout: 15000, proxy: false });
+        if (data && data.Code === 0 && data.Data && data.Data.token) {
+            _vmpfToken = data.Data.token;
+            return _vmpfToken;
+        }
+        console.log("VMPF 登录失败: " + JSON.stringify(data));
+    } catch (e) {
+        console.log("VMPF 登录异常: " + e.message);
+    }
+    return null;
+}
+
+function parseYybGoEntry(rawValue) {
+    const value = String(rawValue || "").trim();
+    if (!value) return { server: "", ref: "", auth: "" };
+    const parts = value.split(/[@#]/);
+    if (parts.length < 2) {
+        const openid = (parts[0] || "").trim();
+        if (!openid) return { server: "", ref: "", auth: "" };
+        return { server: "", ref: openid, auth: "" };
+    }
+    let server = parts[0].trim();
+    const ref = parts[1].trim();
+    const auth = (parts[2] || "").trim() || (process.env.auth || process.env.AUTH || "").trim();
+    if (server.startsWith("http://")) server = server.slice(7);
+    else if (server.startsWith("https://")) server = server.slice(8);
+    server = server.replace(/\/+$/, "");
+    if (!server || !ref) return { server: "", ref: "", auth: "" };
+    return { server, ref, auth };
+}
+// 从环境变量 qingyun_openid 读取内网wxcode服务，多条换行分隔
 let SERVERS = [];
-const envYybGo = process.env.VX_GO || "";
+const envYybGo = process.env.qingyun_openid || "";
 if (envYybGo) {
     SERVERS = envYybGo
         .split(/\r?\n|&/)
@@ -429,7 +447,7 @@ if (envYybGo) {
 }
 // 无有效地址直接退出并提示
 if (SERVERS.length === 0) {
-    console.error("❌ 错误：未读取到环境变量 VX_GO 或无有效IP端口！");
+    console.error("❌ 错误：未读取到环境变量 qingyun_openid 或无有效IP端口！");
     console.error("配置示例（青龙环境变量值，每行一个）：");
     console.error("192.168.1.21:8088");
     console.error("192.168.31.111:8088");
@@ -541,30 +559,22 @@ async function doMagicShop(token) {
 
 // 单个服务器执行逻辑
 async function getCode(server) {
-    // server 格式: "ip:port@ref" 或 "ip:port"
-    const parts = server.split(/[@#]/);
-    const addr = (parts[0] || "").trim();
-    const ref = (parts[1] || "").trim();
-    const auth = (parts[2] || "").trim() || (process.env.auth || process.env.AUTH || "").trim();
-    
-    // 获取 app_id（不同脚本的 APPID/MINI_APP_ID）
+    const { server: parsedServer, ref, auth } = parseYybGoEntry(server);
+    if (!ref) return null;
     const appId = (typeof APPID !== "undefined") ? APPID : (typeof MINI_APP_ID !== "undefined") ? MINI_APP_ID : "";
-    
+    const token = await vmpfLogin();
+    if (!token) return null;
     try {
-        const { data } = await axios.post("http://" + addr + "/wx/code", {
-            openid: ref || "owNAX6gQdCIdZKWsm2c6adr7_eZY",
-            appid: appId,
-            data: {}
-        }, { timeout: 20000, proxy: false, headers: auth ? { Authorization: `Bearer ${auth}` } : {} });
-        const code = data?.data?.code;
-        if (data?.code !== 0 || !code) {
-            console.log("❌ " + addr + " 获取code失败: " + JSON.stringify(data));
+        const { data } = await axios.post(VMPF_URL + "/api/wxapp/JSLogin", { Appid: (typeof APPID !== "undefined") ? APPID : (typeof MINI_APP_ID !== "undefined") ? MINI_APP_ID : "", Wxid: ref }, { timeout: 20000, proxy: false, headers: { Authorization: `Bearer ${token}` } });
+        const code = data && data.Code === 0 && data.Data && data.Data.code;
+        if (!data || data.Code !== 0 || !code) {
+            console.log("获取code失败: " + JSON.stringify(data));
             return null;
         }
-        console.log("✅ " + addr + " 获取code成功");
+        console.log("获取code成功");
         return code;
     } catch (e) {
-        console.log("❌ " + addr + " 获取code异常: " + e.message);
+        console.log("获取code异常: " + e.message);
         return null;
     }
 }
