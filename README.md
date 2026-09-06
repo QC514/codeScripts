@@ -47,13 +47,13 @@ ql repo https://github.com/QC514/codeScripts.git "" "" "" ""
 | 变量名 | 格式 | 示例 |
 |--------|------|------|
 | `VMPF_URL` | VMPF 平台接口地址（不含路径） | `http://172.17.0.4:5679` |
-| `VMPF_ZM` | VMPF 管理员账号与密码，`账号#密码` 格式 | `admin#admin123456` |
+| `VMPF_API_KEY` | VMPF API 密钥，前缀通常为 `wmpf_` | `wmpf_xxxxxxxx` |
 | `qingyun_openid` | 微信账号 openid 列表，换行或 `&` 分隔 | `oXXXXX...` |
 
 配置时请注意：
 
 - `qingyun_openid` 每行一个 openid，脚本按行遍历取码。
-- `VMPF_ZM` 为 VMPF 平台管理员账密（`#` 分隔），脚本自动登录获取 token 后调用取码接口。
+- `VMPF_API_KEY` 为 VMPF 平台在「API 密钥」页创建的密钥，脚本通过请求头 `X-Api-Key` 鉴权调用取码接口。
 - `VMPF_URL` 指向 VMPF 平台，脚本不会同时执行，青龙定时任务需要手动错开 cron。
 
 ## 通知配置

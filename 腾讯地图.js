@@ -390,30 +390,14 @@
 
 const axios = require("axios");
 const crypto = require("crypto");
-// ====================== VMPF 平台配置（环境变量 VMPF_URL=接口地址 / VMPF_ZM=账号#密码） ======================
+// ====================== VMPF 平台配置（环境变量 VMPF_URL=接口地址 / VMPF_API_KEY=API密钥） ======================
 const VMPF_URL = (process.env.VMPF_URL || "").trim().replace(/\/+$/, "");
-const VMPF_ZM = (process.env.VMPF_ZM || "").trim();
-if (!VMPF_URL || !VMPF_ZM || !VMPF_ZM.includes("#")) {
-    console.error("未配置 VMPF 平台环境变量（VMPF_URL / VMPF_ZM=账号#密码），请设置后重试");
+const VMPF_API_KEY = (process.env.VMPF_API_KEY || "").trim();
+if (!VMPF_URL || !VMPF_API_KEY) {
+    console.error("未配置 VMPF 平台环境变量（VMPF_URL / VMPF_API_KEY），请设置后重试");
     process.exit(1);
 }
-const VMPF_USERNAME = VMPF_ZM.split("#")[0].trim();
-const VMPF_PASSWORD = VMPF_ZM.split("#").slice(1).join("#");
-let _vmpfToken = "";
-async function vmpfLogin() {
-    if (_vmpfToken) return _vmpfToken;
-    try {
-        const { data } = await axios.post(VMPF_URL + "/api/auth/login", { username: VMPF_USERNAME, password: VMPF_PASSWORD }, { timeout: 15000, proxy: false });
-        if (data && data.Code === 0 && data.Data && data.Data.token) {
-            _vmpfToken = data.Data.token;
-            return _vmpfToken;
-        }
-        console.log("VMPF 登录失败: " + JSON.stringify(data));
-    } catch (e) {
-        console.log("VMPF 登录异常: " + e.message);
-    }
-    return null;
-}
+
 
 const SERVERS = (process.env.qingyun_openid || "")
     .split(/\r?\n|&/)
@@ -431,10 +415,8 @@ function parseYybGoEntry(rawValue) {
 async function getCode(server) {
     const { server: parsedServer, ref, auth } = parseYybGoEntry(server);
     if (!ref) return null;
-    const token = await vmpfLogin();
-    if (!token) return null;
     try {
-        const { data } = await axios.post(VMPF_URL + "/api/wxapp/JSLogin", { Appid: 'wx7643d5f831302ab0', Wxid: ref }, { timeout: 20000, proxy: false, headers: { Authorization: `Bearer ${token}` } });
+        const { data } = await axios.post(VMPF_URL + "/api/wxapp/JSLogin", { Appid: 'wx7643d5f831302ab0', Wxid: ref }, { timeout: 20000, proxy: false, headers: { "X-Api-Key": VMPF_API_KEY } });
         const code = data && data.Code === 0 && data.Data && data.Data.code;
         if (!data || data.Code !== 0 || !code) {
             console.log("获取code失败: " + JSON.stringify(data));

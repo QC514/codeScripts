@@ -567,35 +567,12 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 APP_ID = "wx51a2021dd921f747"
 PLUSPLUS_TOKEN = os.getenv("PLUSPLUS_TOKEN", "")
 
-# ============ VMPF 平台配置（环境变量 VMPF_URL=接口地址 / VMPF_ZM=账号#密码） ============
+# ============ VMPF 平台配置（环境变量 VMPF_URL=接口地址 / VMPF_API_KEY=API密钥） ============
 VMPF_URL = os.getenv("VMPF_URL", "").strip().rstrip("/")
-VMPF_ZM = os.getenv("VMPF_ZM", "").strip()
-if not VMPF_URL or not VMPF_ZM or "#" not in VMPF_ZM:
-    print("❌ 错误：未配置 VMPF 平台环境变量（VMPF_URL / VMPF_ZM=账号#密码）！")
+VMPF_API_KEY = os.getenv("VMPF_API_KEY", "").strip()
+if not VMPF_URL or not VMPF_API_KEY:
+    print("❌ 错误：未配置 VMPF 平台环境变量（VMPF_URL / VMPF_API_KEY）！")
     sys.exit(1)
-VMPF_USERNAME = VMPF_ZM.split("#", 1)[0].strip()
-VMPF_PASSWORD = VMPF_ZM.split("#", 1)[1]
-
-_vmpf_token = ""
-
-
-def vmpf_login():
-    global _vmpf_token
-    if _vmpf_token:
-        return _vmpf_token
-    try:
-        r = requests.post(
-            f"{VMPF_URL}/api/auth/login",
-            json={"username": VMPF_USERNAME, "password": VMPF_PASSWORD},
-            timeout=15,
-        ).json()
-        if r.get("Code") == 0 and r.get("Data", {}).get("token"):
-            _vmpf_token = r["Data"]["token"]
-            return _vmpf_token
-        print(f"❌ VMPF 登录失败: {str(r)[:200]}")
-    except Exception as e:
-        print(f"❌ VMPF 登录异常: {e}")
-    return None
 
 CODE_URL_LIST = []
 env_yyb_go = os.getenv("qingyun_openid", "")
@@ -816,10 +793,6 @@ def get_wx_code(code_url):
     if not ref:
         return None
 
-    token = vmpf_login()
-    if not token:
-        return None
-
     url = f"{VMPF_URL}/api/wxapp/JSLogin"
     print(f"请求VMPF获取code：{url}")
 
@@ -829,7 +802,7 @@ def get_wx_code(code_url):
             json={"Appid": APP_ID, "Wxid": ref},
             timeout=20,
             proxies={"http": None, "https": None},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"X-Api-Key": VMPF_API_KEY},
         )
         data = res.json()
         code = (data.get("Data") or {}).get("code")
@@ -916,7 +889,7 @@ def get_user_info(token, headers, proxy_config, account_name):
     """获取用户信息+总积分【支持代理+直连兜底】"""
     try:
         payload = {"version": "251", "client": "wxmp", "token": token}
-        req_headers = {**headers, "Authorization": f"Bearer {token}"}
+        req_headers = {**headers, "X-Api-Key": VMPF_API_KEY}
 
         # 优先代理请求
         if proxy_config:
